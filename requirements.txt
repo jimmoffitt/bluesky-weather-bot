@@ -1,0 +1,19 @@
+# bluesky_weather_bot dependencies
+# Install with: pip install -r requirements.txt
+
+# Core
+requests>=2.31.0
+python-dotenv>=1.0.0
+PyYAML>=6.0
+
+# Location resolution
+pgeocode>=0.4.0          # offline US zip code lookup (downloads data on first use)
+geopy>=2.4.0             # Nominatim fallback geocoding for non-top-200 cities
+timezonefinder>=6.2.0    # accurate timezone from lat/lon
+
+# Bluesky (AT Protocol)
+atproto>=0.0.46          # official Bluesky Python SDK
+
+# Testing
+pytest>=7.4.0
+pytest-mock>=3.12.0
