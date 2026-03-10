@@ -1,0 +1,18 @@
+[Unit]
+Description=ZipWx Bluesky Weather Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/bluesky-weather-bot
+ExecStart=/home/pi/bluesky-weather-bot/.venv/bin/python3 main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zipwx
+
+[Install]
+WantedBy=multi-user.target
