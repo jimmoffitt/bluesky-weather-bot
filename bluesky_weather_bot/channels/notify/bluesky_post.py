@@ -64,6 +64,9 @@ class BlueskyPostNotifyChannel(NotificationChannel):
                     error="Not authenticated",
                 )
 
+        if payload.post_images:
+            return self._send_image_post(payload)
+
         root_uri: Optional[str] = None
         root_cid: Optional[str] = None
         parent_uri: Optional[str] = None
@@ -178,3 +181,37 @@ class BlueskyPostNotifyChannel(NotificationChannel):
             reply_ref = atproto_models.AppBskyFeedPost.ReplyRef(root=root, parent=parent)
 
         return self._client.send_post(text=text, reply_to=reply_ref)
+
+    def _send_image_post(self, payload: NotificationPayload) -> NotificationResult:
+        """Send a single post with up to 3 embedded PNG images."""
+        caption = payload.post_thread[0] if payload.post_thread else ""
+        images  = payload.post_images or []
+        alts    = payload.post_image_alts or [""] * len(images)
+
+        # Build reply ref using same logic as _post()
+        reply_ref = None
+        if payload.reply_to_uri:
+            from atproto import models as atproto_models
+            root   = atproto_models.ComAtprotoRepoStrongRef.Main(
+                uri=payload.reply_to_uri,
+                cid=payload.reply_to_cid or "",
+            )
+            parent = atproto_models.ComAtprotoRepoStrongRef.Main(
+                uri=payload.reply_to_uri,
+                cid=payload.reply_to_cid or "",
+            )
+            reply_ref = atproto_models.AppBskyFeedPost.ReplyRef(root=root, parent=parent)
+
+        try:
+            result = self._client.send_images(
+                text=caption,
+                images=images,
+                image_alts=alts,
+                reply_to=reply_ref,
+            )
+            uri = getattr(result, "uri", None) or str(result)
+            logger.info("[bluesky_post] Image post sent: %s (%d image(s))", uri, len(images))
+            return NotificationResult(success=True, channel=self.CHANNEL_NAME, post_uri=uri)
+        except Exception as exc:
+            logger.error("[bluesky_post] Image post failed: %s", exc)
+            return NotificationResult(success=False, channel=self.CHANNEL_NAME, error=str(exc))

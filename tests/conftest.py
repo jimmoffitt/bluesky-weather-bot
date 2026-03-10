@@ -45,4 +45,5 @@ def mock_settings(tmp_path):
         log_level="DEBUG",
         weather_cache_ttl_minutes=30,
         skip_historical=True,
+        post_mode="text",
     )

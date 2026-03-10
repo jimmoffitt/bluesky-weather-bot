@@ -43,6 +43,9 @@ class Settings:
     weather_cache_ttl_minutes: int
     skip_historical: bool
 
+    # Output mode
+    post_mode: str  # "text" | "image"
+
     @classmethod
     def load(cls, env_file: str | Path = ".local.env") -> "Settings":
         _load_dotenv(env_file)
@@ -83,6 +86,7 @@ class Settings:
             log_level=opt("LOG_LEVEL", "INFO").upper(),
             weather_cache_ttl_minutes=opt_int("WEATHER_CACHE_TTL_MINUTES", 30),
             skip_historical=opt_bool("SKIP_HISTORICAL", False),
+            post_mode=opt("POST_MODE", "text").lower(),
         )
 
     def ensure_directories(self) -> None:

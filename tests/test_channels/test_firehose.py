@@ -109,10 +109,12 @@ class TestBuildRequest:
         )
         assert req.reply_to_cid == "bafyreid999"
 
-    def test_returns_none_when_no_location(self, channel):
+    def test_returns_request_with_null_location_when_no_location(self, channel):
+        """No location → AlertRequest dispatched with raw_location=None (triggers help reply)."""
         req = channel._build_request(
             text="#ZipWx",
             repo="did:plc:abc123",
             op=self._make_op(),
         )
-        assert req is None
+        assert req is not None
+        assert req.raw_location is None

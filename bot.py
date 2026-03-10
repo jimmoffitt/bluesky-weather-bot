@@ -53,6 +53,16 @@ from bluesky_weather_bot.weather.service import WeatherService
 logger = logging.getLogger(__name__)
 
 
+def _try_build_image_formatter():
+    """Load WeatherImageFormatter; return None (log warning) if Pillow/matplotlib absent."""
+    try:
+        from bluesky_weather_bot.weather.image_formatter import WeatherImageFormatter
+        return WeatherImageFormatter()
+    except ImportError as exc:
+        logger.warning("[bot] WeatherImageFormatter unavailable: %s", exc)
+        return None
+
+
 class ZipWx:
     """
     Assembles and runs the full bot pipeline.
@@ -70,6 +80,14 @@ class ZipWx:
             db=self._db,
             skip_historical=settings.skip_historical,
         )
+
+        self._post_mode      = settings.post_mode
+        self._image_formatter = None
+        if settings.post_mode == "image":
+            self._image_formatter = _try_build_image_formatter()
+            if self._image_formatter is None:
+                logger.warning("[bot] Falling back to text mode.")
+                self._post_mode = "text"
 
         # Alert channels (inputs)
         self._alert_channels: list[AlertChannel] = []
@@ -182,15 +200,35 @@ class ZipWx:
 
         # Format and send one thread per resolved location
         for report in reports:
-            thread_posts = self._formatter.format_thread(report)
-            payload = NotificationPayload(
-                request_db_id=db_id,
-                post_thread=thread_posts,
-                reply_to_uri=request.reply_to_uri,
-                reply_to_cid=request.reply_to_cid,
-                recipient_handle=request.requester_handle,
-                target_channel=self._route(request),
+            target_channel = self._route(request)
+            use_images = (
+                self._post_mode == "image"
+                and self._image_formatter is not None
+                and target_channel == "bluesky_post"   # DMs always use text
             )
+            if use_images:
+                images, alts, caption = self._image_formatter.format_images(report)
+                thread_posts = [caption]
+                payload = NotificationPayload(
+                    request_db_id=db_id,
+                    post_thread=thread_posts,
+                    reply_to_uri=request.reply_to_uri,
+                    reply_to_cid=request.reply_to_cid,
+                    recipient_handle=request.requester_handle,
+                    target_channel=target_channel,
+                    post_images=images,
+                    post_image_alts=alts,
+                )
+            else:
+                thread_posts = self._formatter.format_thread(report)
+                payload = NotificationPayload(
+                    request_db_id=db_id,
+                    post_thread=thread_posts,
+                    reply_to_uri=request.reply_to_uri,
+                    reply_to_cid=request.reply_to_cid,
+                    recipient_handle=request.requester_handle,
+                    target_channel=target_channel,
+                )
             result = self._deliver(payload)
 
             # Log response

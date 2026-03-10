@@ -152,18 +152,18 @@ class TestCheckDMs:
 
         assert len(received) == 0
 
-    def test_skips_message_with_no_location(self, poller):
-        # The bare-text fallback accepts 3-50 char strings as location candidates,
-        # so we need text that is either too short or clearly unextractable.
+    def test_dispatches_with_null_location_when_no_location(self, poller):
+        """No-location DMs are dispatched with raw_location=None so the bot can send a help reply."""
         chat = self._setup(poller)
         chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(
-            logs=[_make_log("msg1", "did:plc:user", "hi")]  # too short (< 3 chars)
+            logs=[_make_log("msg1", "did:plc:user", "hi")]  # too short for location extraction
         )
         received = []
         poller.on_request(received.append)
         poller._check_dms()
 
-        assert len(received) == 0
+        assert len(received) == 1
+        assert received[0].raw_location is None
 
     def test_message_marked_seen_even_without_location(self, poller):
         """No-location messages should still be marked seen to avoid reprocessing."""

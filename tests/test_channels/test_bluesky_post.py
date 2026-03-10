@@ -186,6 +186,56 @@ class TestReplyToExistingPost:
 
 
 # ---------------------------------------------------------------------------
+# Image mode
+# ---------------------------------------------------------------------------
+
+class TestImageMode:
+    """send_images is called (not send_post) when post_images is set."""
+
+    def test_image_payload_calls_send_images(self, channel):
+        ch, client = channel
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8   # minimal fake PNG header
+        client.send_images.return_value = _make_post_ref(
+            "at://did:plc:test/app.bsky.feed.post/img0", "imgcid0"
+        )
+        payload = NotificationPayload(
+            request_db_id=1,
+            post_thread=["Caption text"],
+            post_images=[png, png],
+            post_image_alts=["alt 1", "alt 2"],
+        )
+        result = ch.send(payload)
+
+        assert result.success
+        client.send_images.assert_called_once()
+        client.send_post.assert_not_called()
+
+    def test_text_payload_does_not_call_send_images(self, channel):
+        ch, client = channel
+        payload = NotificationPayload(
+            request_db_id=1,
+            post_thread=["Text only"],
+        )
+        ch.send(payload)
+        client.send_images.assert_not_called()
+        client.send_post.assert_called_once()
+
+    def test_send_images_api_error_returns_failure(self, channel):
+        ch, client = channel
+        client.send_images.side_effect = Exception("upload failed")
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+        payload = NotificationPayload(
+            request_db_id=1,
+            post_thread=["Caption"],
+            post_images=[png],
+            post_image_alts=["alt"],
+        )
+        result = ch.send(payload)
+        assert not result.success
+        assert "upload failed" in result.error
+
+
+# ---------------------------------------------------------------------------
 # Integration tests — hit real Bluesky API
 # ---------------------------------------------------------------------------
 

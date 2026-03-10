@@ -50,6 +50,10 @@ class NotificationPayload:
     # "bluesky_post" | "bluesky_dm" | "email" | "sms"
     target_channel: str = "bluesky_post"
 
+    # Image mode: raw PNG bytes (1–3 items) and matching alt texts
+    post_images: Optional[list[bytes]] = None
+    post_image_alts: Optional[list[str]] = None
+
     created_at: datetime = field(default_factory=datetime.utcnow)
 
 
