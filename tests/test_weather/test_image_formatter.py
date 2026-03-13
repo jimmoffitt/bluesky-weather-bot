@@ -140,7 +140,7 @@ class TestPngValidity:
         report = _make_report()
         images, _, _ = WeatherImageFormatter().format_images(report)
         pil_img = PILImage.open(io.BytesIO(images[0]))
-        assert pil_img.size == (720, 900)
+        assert pil_img.size == (720, 1000)
 
     def test_historical_card_dimensions(self):
         report = _make_report(historical=_make_historical())

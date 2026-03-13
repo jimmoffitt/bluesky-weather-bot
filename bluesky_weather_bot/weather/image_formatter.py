@@ -306,7 +306,7 @@ class WeatherImageFormatter:
     def _render_current_card(self, report: WeatherReport) -> bytes:
         # Portrait layout — optimised for phone viewing
         W      = 720
-        H      = 900
+        H      = 1000
         H_HDR  = 80    # header strip
         TEMP_H = 190   # temperature block below header
 
@@ -400,9 +400,9 @@ class WeatherImageFormatter:
         STATS_Y0 = H_HDR + TEMP_H
         ROW_H    = (H - STATS_Y0) // 7
 
-        f_lbl = _font_mono(26)
-        f_pri = _font_mono(30, medium=True)
-        f_sec = _font_mono(24)
+        f_lbl = _font_mono(32)
+        f_pri = _font_mono(40, medium=True)
+        f_sec = _font_mono(30)
 
         ICON_X = 30
         LBL_X  = 72
@@ -430,9 +430,9 @@ class WeatherImageFormatter:
         ]
 
         # Stacked: label line 1, value line 2
-        LBL_H   = 26
+        LBL_H   = 32
         GAP_LV  = 6
-        VAL_H   = 30
+        VAL_H   = 40
         TOP_PAD = max(4, (ROW_H - LBL_H - GAP_LV - VAL_H) // 2)
 
         for i, (label, icon_color, icon_type, bar_pct, pri_val, sec_val) in enumerate(rows):
