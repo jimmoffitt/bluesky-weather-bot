@@ -46,16 +46,18 @@ from bluesky_weather_bot.weather.models import (
 # Colour palette
 # ---------------------------------------------------------------------------
 
-BG       = "#0d1117"    # overall background
-PANEL_L  = "#161b22"    # left panel
-SEP      = "#21262d"    # separator lines / progress-bar track
-TEXT_PRI = "#e6edf3"    # primary text
-TEXT_MUT = "#8b949e"    # muted / secondary text
-AMBER    = "#f7a14b"    # temperature, amber highlights
-BLUE     = "#6ea8fe"    # blue accent, badge
+BG       = "#141b26"   # --card  (card / right panel bg)
+PANEL_L  = "#162032"   # --card2 (left temp panel)
+HDR_BG   = "#111827"   # header strip
+SEP      = "#1c2534"   # --divider (row separator)
+BORDER   = "#202c3e"   # --border  (panel edge lines)
+TEXT_PRI = "#e2eaf7"   # --text
+TEXT_MUT = "#6b7fa3"   # --muted
+AMBER    = "#f7a14b"   # --accent2 (temperature)
+BLUE     = "#6ea8fe"   # --accent  (badge, bars)
 
 # Aliases used by forecast chart and historical card
-HEADER_BG = PANEL_L
+HEADER_BG = HDR_BG
 ACCENT    = SEP
 TEXT_AMB  = AMBER
 TEXT_SKY  = BLUE
@@ -247,8 +249,11 @@ class WeatherImageFormatter:
     # ------------------------------------------------------------------
 
     def _render_current_card(self, report: WeatherReport) -> bytes:
-        W, H    = 800, 480
-        SPLIT_X = 272          # left / right panel boundary
+        W      = 800
+        H      = 480
+        H_HDR  = 72    # full-width header strip height
+        PL_W   = 220   # left (temp) panel width
+        RS_X   = PL_W  # right panel start x
 
         img, draw = _new_card(W, H)
 
@@ -265,68 +270,95 @@ class WeatherImageFormatter:
         ts_str   = f"{dow} {mon} {day}  \u00b7  {hour12}:{minute} {ampm} {tz}"
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
 
-        # ── Left panel ───────────────────────────────────────────────────────
-        draw.rectangle([(0, 0), (SPLIT_X - 1, H)], fill=_hex_to_rgb(PANEL_L))
+        # ── Full-width header ─────────────────────────────────────────────────
+        draw.rectangle([(0, 0), (W, H_HDR)], fill=_hex_to_rgb(HDR_BG))
+        draw.line([(0, H_HDR), (W, H_HDR)], fill=_hex_to_rgb(BORDER), width=1)
+        draw.text((22, 20), loc,    font=_font_syne(20), fill=TEXT_PRI)
+        draw.text((22, 48), ts_str, font=_font_mono(11), fill=TEXT_MUT)
 
-        draw.text((18, 26), loc,    font=_font_syne(24), fill=TEXT_PRI)
-        draw.text((18, 62), ts_str, font=_font_mono(11), fill=TEXT_MUT)
-
-        # Temperature: large number + smaller "°F" side-by-side
-        f_num  = _font_syne(100)
-        f_unit = _font_syne(46)
-        num_str  = f"{c.temperature_f:.0f}"
-        unit_str = "\u00b0F"
-        nb = draw.textbbox((0, 0), num_str,  font=f_num)
-        ub = draw.textbbox((0, 0), unit_str, font=f_unit)
-        nw      = nb[2] - nb[0]   # glyph width
-        n_bot   = nb[3]            # bottom of glyph relative to draw origin (= 110)
-        uw      = ub[2] - ub[0]
-        ty      = 130
-        tx      = max(8, (SPLIT_X - nw - 4 - uw) // 2)
-        # "°F" top-aligned to the number's glyph top (nb[1]=43)
-        unit_y  = ty + nb[1] - ub[1]
-        draw.text((tx,           ty),     num_str,  font=f_num,  fill=AMBER)
-        draw.text((tx + nw + 4,  unit_y), unit_str, font=f_unit, fill=AMBER)
-
-        _text_centered(draw, ty + n_bot + 16,
-                       f"{c.temperature_c:.0f}\u00b0C",
-                       _font_mono(20), TEXT_MUT, SPLIT_X)
-        _text_centered(draw, ty + n_bot + 46,
-                       f"FEELS LIKE {c.feels_like_f:.0f}\u00b0F",
-                       _font_mono(12), TEXT_MUT, SPLIT_X)
-
-        # ── Panel separator ──────────────────────────────────────────────────
-        draw.rectangle([(SPLIT_X, 0), (SPLIT_X + 1, H)], fill=_hex_to_rgb(SEP))
-
-        # ── Condition badge (top-right) ──────────────────────────────────────
-        f_badge    = _font_mono(11, medium=True)
-        badge_text = c.weather_description.upper()[:24]
+        # Condition badge — pill shape, Syne font, right-aligned in header
+        f_badge    = _font_syne(13)
+        badge_text = c.weather_description[:24]
         bbbox      = draw.textbbox((0, 0), badge_text, font=f_badge)
         bw, bh     = bbbox[2] - bbbox[0], bbbox[3] - bbbox[1]
-        bpx, bpy   = 12, 5
-        bx2        = W - 18
+        bpx, bpy   = 14, 6
+        bx2        = W - 20
         bx1        = bx2 - bw - 2 * bpx
-        by1, by2   = 18, 18 + bh + 2 * bpy
-        draw.rounded_rectangle([(bx1, by1), (bx2, by2)], radius=10,
-                                fill=(13, 28, 71), outline=_hex_to_rgb(BLUE), width=1)
+        by1        = (H_HDR - bh - 2 * bpy) // 2
+        by2        = by1 + bh + 2 * bpy
+        draw.rounded_rectangle([(bx1, by1), (bx2, by2)], radius=100,
+                                fill=(24, 36, 56), outline=_hex_to_rgb(BLUE), width=1)
         draw.text((bx1 + bpx, by1 + bpy), badge_text,
                   font=f_badge, fill=_hex_to_rgb(BLUE))
 
-        # ── Stat rows (right panel) ──────────────────────────────────────────
-        ROW_START = 58
-        ROW_H     = (H - ROW_START) // 7   # ≈ 60 px
+        # ── Left temp panel ───────────────────────────────────────────────────
+        draw.rectangle([(0, H_HDR), (PL_W - 1, H)], fill=_hex_to_rgb(PANEL_L))
+        draw.line([(PL_W, H_HDR), (PL_W, H)], fill=_hex_to_rgb(BORDER), width=1)
+
+        f_num    = _font_syne(62)
+        f_unit   = _font_syne(28)
+        f_tc_num = _font_syne(22)
+        f_tc_u   = _font_syne(15)
+
+        num_str  = f"{c.temperature_f:.0f}"
+        unit_str = "\u00b0F"
+        tc_str   = f"{c.temperature_c:.0f}"
+
+        nb = draw.textbbox((0, 0), num_str,  font=f_num)
+        cb = draw.textbbox((0, 0), tc_str,   font=f_tc_num)
+        nw, n_bot = nb[2] - nb[0], nb[3]
+        uw  = draw.textbbox((0, 0), unit_str,   font=f_unit)[2]
+        c_bot = cb[3]
+
+        # Vertically centre the temp block in the panel body
+        PL_H    = H - H_HDR
+        BLOCK_H = n_bot + 10 + c_bot + 26 + 14
+        ty      = H_HDR + max(16, (PL_H - BLOCK_H) // 2)
+
+        # Big temperature: number + unit side-by-side
+        total_w = nw + 4 + uw
+        tx      = max(8, (PL_W - total_w) // 2)
+        unit_y  = ty + nb[1] - draw.textbbox((0, 0), unit_str, font=f_unit)[1]
+        draw.text((tx,          ty),     num_str,  font=f_num,  fill=AMBER)
+        draw.text((tx + nw + 4, unit_y), unit_str, font=f_unit, fill=AMBER)
+
+        # °C — Syne, two-part (number + smaller unit)
+        tc_y    = ty + n_bot + 10
+        tu_bbox = draw.textbbox((0, 0), "\u00b0C", font=f_tc_u)
+        c_bbox  = draw.textbbox((0, 0), tc_str,    font=f_tc_num)
+        tc_w    = (c_bbox[2] - c_bbox[0]) + (tu_bbox[2] - tu_bbox[0])
+        tc_x    = max(4, (PL_W - tc_w) // 2)
+        draw.text((tc_x, tc_y),
+                  tc_str, font=f_tc_num, fill=TEXT_MUT)
+        draw.text((tc_x + (c_bbox[2] - c_bbox[0]),
+                   tc_y + cb[1] - tu_bbox[1]),
+                  "\u00b0C", font=f_tc_u, fill=TEXT_MUT)
+
+        # Thin horizontal divider
+        div_y = tc_y + c_bot + 10
+        dw    = 32
+        draw.line([(PL_W // 2 - dw // 2, div_y), (PL_W // 2 + dw // 2, div_y)],
+                  fill=_hex_to_rgb(BORDER), width=1)
+
+        # Feels like
+        _text_centered(draw, div_y + 10,
+                       f"FEELS LIKE  {c.feels_like_f:.0f}\u00b0F",
+                       _font_mono(11), TEXT_MUT, PL_W)
+
+        # ── Right stats panel ─────────────────────────────────────────────────
+        ROW_H  = PL_H // 7   # ≈ 58 px
+        ROW_Y0 = H_HDR
 
         f_lbl = _font_mono(11)
-        f_pri = _font_mono(15, medium=True)   # primary value (white)
-        f_sec = _font_mono(12)                # metric value (muted)
+        f_pri = _font_mono(14, medium=True)
+        f_sec = _font_mono(12)
 
-        ICON_X = SPLIT_X + 20   # center of icon square
-        LBL_X  = SPLIT_X + 36   # label left edge
-        BAR_X1 = W - 230        # progress bar start (inline, right side)
-        BAR_X2 = W - 90         # progress bar end
-        VAL_X  = W - 16         # right edge for all values
+        ICON_X = RS_X + 22    # icon centre x
+        LBL_X  = RS_X + 52    # label left edge (after 26px icon + gap)
+        BAR_X1 = RS_X + 300   # bar start
+        BAR_X2 = W - 80       # bar end
+        VAL_X  = W - 20       # value right edge
 
-        # (label, icon_color, bar_pct_or_None, primary_str, secondary_str_or_None)
         rows = [
             ("HUMIDITY",      "blue",  c.humidity_pct,
              f"{c.humidity_pct:.0f} %",    None),
@@ -349,25 +381,25 @@ class WeatherImageFormatter:
         ]
 
         for i, (label, icon_color, bar_pct, pri_val, sec_val) in enumerate(rows):
-            ry  = ROW_START + i * ROW_H
+            ry  = ROW_Y0 + i * ROW_H
             rym = ry + ROW_H // 2
 
             if i > 0:
-                draw.line([(SPLIT_X + 2, ry), (W, ry)],
+                draw.line([(RS_X, ry), (W, ry)],
                           fill=_hex_to_rgb(SEP), width=1)
 
-            # Small rounded-square icon
-            ic = _hex_to_rgb(BLUE  if icon_color == "blue"  else
-                             AMBER if icon_color == "amber" else TEXT_MUT)
+            # Icon: 26×26 rounded square with tinted background
+            ic = ((18, 42, 80)  if icon_color == "blue"  else
+                  (55, 36, 14)  if icon_color == "amber" else
+                  (28, 40, 62))
             draw.rounded_rectangle(
-                [(ICON_X - 7, rym - 7), (ICON_X + 7, rym + 7)],
-                radius=3, fill=ic)
+                [(ICON_X - 13, rym - 13), (ICON_X + 13, rym + 13)],
+                radius=6, fill=ic)
 
-            # Label (vertically centered)
+            # Label
             draw.text((LBL_X, rym - 7), label, font=f_lbl, fill=TEXT_MUT)
 
             if bar_pct is not None:
-                # Inline progress bar + percentage value to its right
                 bar_fill = _hex_to_rgb(BLUE if icon_color == "blue" else AMBER)
                 draw.rounded_rectangle(
                     [(BAR_X1, rym - 2), (BAR_X2, rym + 2)],
@@ -378,12 +410,10 @@ class WeatherImageFormatter:
                         [(BAR_X1, rym - 2), (BAR_X1 + fill_w, rym + 2)],
                         radius=2, fill=bar_fill)
                 bbox = draw.textbbox((0, 0), pri_val, font=f_pri)
-                pw   = bbox[2] - bbox[0]
-                ph   = bbox[3] - bbox[1]
+                pw, ph = bbox[2] - bbox[0], bbox[3] - bbox[1]
                 draw.text((VAL_X - pw, rym - ph // 2), pri_val,
                           font=f_pri, fill=TEXT_PRI)
             elif sec_val:
-                # Two-tone: primary (white, larger) + metric (muted, smaller)
                 bp = draw.textbbox((0, 0), pri_val, font=f_pri)
                 bs = draw.textbbox((0, 0), sec_val, font=f_sec)
                 pw, ph = bp[2] - bp[0], bp[3] - bp[1]
@@ -393,10 +423,8 @@ class WeatherImageFormatter:
                 draw.text((x_pri, rym - ph // 2), pri_val, font=f_pri, fill=TEXT_PRI)
                 draw.text((x_sec, rym - sh // 2), sec_val, font=f_sec, fill=TEXT_MUT)
             else:
-                # Single value, right-aligned
                 bbox = draw.textbbox((0, 0), pri_val, font=f_pri)
-                pw   = bbox[2] - bbox[0]
-                ph   = bbox[3] - bbox[1]
+                pw, ph = bbox[2] - bbox[0], bbox[3] - bbox[1]
                 draw.text((VAL_X - pw, rym - ph // 2), pri_val,
                           font=f_pri, fill=TEXT_PRI)
 
