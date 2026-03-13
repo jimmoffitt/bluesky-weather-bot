@@ -305,7 +305,7 @@ class WeatherImageFormatter:
 
     def _render_current_card(self, report: WeatherReport) -> bytes:
         # Portrait layout — optimised for phone viewing
-        W      = 600
+        W      = 720
         H      = 900
         H_HDR  = 80    # header strip
         TEMP_H = 190   # temperature block below header
@@ -400,7 +400,7 @@ class WeatherImageFormatter:
         STATS_Y0 = H_HDR + TEMP_H
         ROW_H    = (H - STATS_Y0) // 7
 
-        f_lbl = _font_mono(22)
+        f_lbl = _font_mono(26)
         f_pri = _font_mono(30, medium=True)
         f_sec = _font_mono(24)
 
@@ -430,7 +430,7 @@ class WeatherImageFormatter:
         ]
 
         # Stacked: label line 1, value line 2
-        LBL_H   = 22
+        LBL_H   = 26
         GAP_LV  = 6
         VAL_H   = 30
         TOP_PAD = max(4, (ROW_H - LBL_H - GAP_LV - VAL_H) // 2)
@@ -457,7 +457,7 @@ class WeatherImageFormatter:
             _draw_icon(draw, ICON_X, rym, 10, icon_type, ic_clr)
 
             # Line 1 — label
-            draw.text((LBL_X, y_lbl), label, font=f_lbl, fill=TEXT_MUT)
+            draw.text((LBL_X, y_lbl), label, font=f_lbl, fill=TEXT_PRI)
 
             # Line 2 — value
             if bar_pct is not None:
@@ -631,14 +631,19 @@ class WeatherImageFormatter:
     # ------------------------------------------------------------------
 
     def _caption(self, report: WeatherReport) -> str:
+        import re
         c   = report.current
         loc = report.location.display_name
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
+        tags = "#ZipWx"
+        m = re.search(r',\s*([A-Z]{2})\s*$', loc)
+        if m:
+            tags += f" #{m.group(1)}Wx"
         text = (
             f"{loc}: {c.weather_description}, "
             f"{c.temperature_f:.0f}F ({c.temperature_c:.0f}C), "
             f"humidity {c.humidity_pct:.0f}%, "
-            f"wind {c.wind_speed_mph:.0f}mph {cardinal}. #WxBot"
+            f"wind {c.wind_speed_mph:.0f}mph {cardinal}. {tags}"
         )
         return text[:300]
 
