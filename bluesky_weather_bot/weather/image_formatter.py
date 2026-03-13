@@ -26,6 +26,7 @@ from __future__ import annotations
 import io
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 # Matplotlib MUST be configured before pyplot is imported
@@ -42,16 +43,23 @@ from bluesky_weather_bot.weather.models import (
 )
 
 # ---------------------------------------------------------------------------
-# Colour palette (dark theme)
+# Colour palette
 # ---------------------------------------------------------------------------
 
-BG          = "#1a1a2e"    # image background
-HEADER_BG   = "#16213e"    # header / axis background
-ACCENT      = "#0f3460"    # accent line / grid
-TEXT_PRI    = "#e0e0e0"    # primary text
-TEXT_AMB    = "#f5a623"    # amber — temperature values
-TEXT_SKY    = "#7ec8e3"    # sky-blue — secondary values / precip
-TEXT_SEC    = "#8899aa"    # secondary / footer text
+BG       = "#0d1117"    # overall background
+PANEL_L  = "#161b22"    # left panel
+SEP      = "#21262d"    # separator lines / progress-bar track
+TEXT_PRI = "#e6edf3"    # primary text
+TEXT_MUT = "#8b949e"    # muted / secondary text
+AMBER    = "#f7a14b"    # temperature, amber highlights
+BLUE     = "#6ea8fe"    # blue accent, badge
+
+# Aliases used by forecast chart and historical card
+HEADER_BG = PANEL_L
+ACCENT    = SEP
+TEXT_AMB  = AMBER
+TEXT_SKY  = BLUE
+TEXT_SEC  = TEXT_MUT
 
 # ---------------------------------------------------------------------------
 # Cardinal directions (shared with formatter.py)
@@ -108,6 +116,32 @@ def _font(size: int, bold: bool = False) -> ImageFont.ImageFont:
         except Exception:
             pass
     return ImageFont.load_default()
+
+
+_FONTS_DIR = Path(__file__).parent.parent / "fonts"
+
+
+def _font_syne(size: int) -> ImageFont.ImageFont:
+    """Syne Bold — display / values.  Falls back to DejaVu Bold."""
+    path = _FONTS_DIR / "Syne-Bold.ttf"
+    if path.is_file():
+        try:
+            return ImageFont.truetype(str(path), size)
+        except Exception:
+            pass
+    return _font(size, bold=True)
+
+
+def _font_mono(size: int, medium: bool = False) -> ImageFont.ImageFont:
+    """DM Mono — labels / units / secondary text.  Falls back to DejaVu."""
+    fname = "DMMono-Medium.ttf" if medium else "DMMono-Regular.ttf"
+    path = _FONTS_DIR / fname
+    if path.is_file():
+        try:
+            return ImageFont.truetype(str(path), size)
+        except Exception:
+            pass
+    return _font(size)
 
 
 # ---------------------------------------------------------------------------
@@ -213,73 +247,141 @@ class WeatherImageFormatter:
     # ------------------------------------------------------------------
 
     def _render_current_card(self, report: WeatherReport) -> bytes:
-        W, H = 800, 380
+        W, H    = 800, 480
+        SPLIT_X = 272          # left / right panel boundary
+
         img, draw = _new_card(W, H)
 
-        c   = report.current
-        loc = report.location.display_name
-        ts  = c.timestamp
-        tz  = _tz_abbr(report.location.timezone, ts)
-        day    = ts.day
-        hour12 = ts.hour % 12 or 12
-        ampm   = "AM" if ts.hour < 12 else "PM"
-        ts_str = ts.strftime(f"%a %b {day}  {hour12}:{ts.strftime('%M')} {ampm} {tz}")
+        c        = report.current
+        loc      = report.location.display_name
+        ts       = c.timestamp
+        tz       = _tz_abbr(report.location.timezone, ts)
+        dow      = ts.strftime("%a").upper()
+        mon      = ts.strftime("%b").upper()
+        day      = ts.day
+        hour12   = ts.hour % 12 or 12
+        minute   = ts.strftime("%M")
+        ampm     = "AM" if ts.hour < 12 else "PM"
+        ts_str   = f"{dow} {mon} {day}  \u00b7  {hour12}:{minute} {ampm} {tz}"
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
 
-        # Compact header bar
-        HEADER_H = 56
-        draw.rectangle([(0, 0), (W, HEADER_H)], fill=_hex_to_rgb(HEADER_BG))
-        _text_centered(draw, 9, f"{loc}  |  {c.weather_description}",
-                       _font(22, bold=True), TEXT_PRI, W)
-        _text_centered(draw, 34, ts_str, _font(14), TEXT_SEC, W)
-        draw.rectangle([(0, HEADER_H), (W, HEADER_H + 2)], fill=_hex_to_rgb(ACCENT))
+        # ── Left panel ───────────────────────────────────────────────────────
+        draw.rectangle([(0, 0), (SPLIT_X - 1, H)], fill=_hex_to_rgb(PANEL_L))
 
-        y   = HEADER_H + 6   # 64
-        PAD = 40
+        f_loc  = _font_syne(22)
+        f_ts   = _font_mono(11)
+        f_big  = _font_syne(66)
+        f_degc = _font_mono(21)
+        f_fl   = _font_mono(12)
 
-        # Big temperature — no divider lines below
-        draw.text((PAD, y),
-                  f"{c.temperature_f:.0f}F / {c.temperature_c:.0f}C",
-                  font=_font(50, bold=True), fill=TEXT_AMB)
-        draw.text((PAD, y + 58),
-                  f"Feels like {c.feels_like_f:.0f}F ({c.feels_like_c:.0f}C)",
-                  font=_font(17), fill=TEXT_PRI)
+        draw.text((18, 28), loc,    font=f_loc, fill=TEXT_PRI)
+        draw.text((18, 60), ts_str, font=f_ts,  fill=TEXT_MUT)
 
-        y += 88   # 152
+        temp_str = f"{c.temperature_f:.0f}\u00b0F"
+        tbbox    = draw.textbbox((0, 0), temp_str, font=f_big)
+        tw       = tbbox[2] - tbbox[0]
+        th       = tbbox[3] - tbbox[1]
+        tx       = max(8, (SPLIT_X - tw) // 2)
+        ty       = 118
+        draw.text((tx, ty), temp_str, font=f_big, fill=AMBER)
 
-        # 2-column metric grid (no dividers)
-        MID   = W // 2
-        COLS  = [PAD, MID + 10]
-        ROW_H = 44
-        f_lbl = _font(13)
-        f_val = _font(20, bold=True)
+        degc_str = f"{c.temperature_c:.0f}\u00b0C"
+        _text_centered(draw, ty + th + 10, degc_str, f_degc, TEXT_MUT, SPLIT_X)
 
-        def _stat(col: int, y0: int, label: str, value: str) -> None:
-            draw.text((COLS[col], y0),      label, font=f_lbl, fill=TEXT_SKY)
-            draw.text((COLS[col], y0 + 16), value, font=f_val, fill=TEXT_PRI)
+        fl_str = f"FEELS LIKE {c.feels_like_f:.0f}\u00b0F"
+        _text_centered(draw, ty + th + 40, fl_str, f_fl, TEXT_MUT, SPLIT_X)
 
-        _stat(0, y, "HUMIDITY",    f"{c.humidity_pct:.0f}%")
-        _stat(1, y, "CLOUD COVER", f"{c.cloud_cover_pct:.0f}%")
-        y += ROW_H
+        # ── Panel separator ──────────────────────────────────────────────────
+        draw.rectangle([(SPLIT_X, 0), (SPLIT_X + 1, H)], fill=_hex_to_rgb(SEP))
 
-        _stat(0, y, "WIND",
-              f"{c.wind_speed_mph:.0f}mph ({c.wind_speed_kph:.0f}km/h) {cardinal}")
-        _stat(1, y, "GUSTS",
-              f"{c.wind_gusts_mph:.0f}mph ({c.wind_gusts_kph:.0f}km/h)")
-        y += ROW_H
+        # ── Condition badge (top-right of right panel) ───────────────────────
+        f_badge    = _font_mono(11, medium=True)
+        badge_text = c.weather_description.upper()[:24]
+        bbbox      = draw.textbbox((0, 0), badge_text, font=f_badge)
+        bw, bh     = bbbox[2] - bbbox[0], bbbox[3] - bbbox[1]
+        bpx, bpy   = 12, 5
+        bx2        = W - 18
+        bx1        = bx2 - bw - 2 * bpx
+        by1        = 18
+        by2        = by1 + bh + 2 * bpy
+        draw.rounded_rectangle([(bx1, by1), (bx2, by2)], radius=10,
+                                fill=(13, 28, 71), outline=_hex_to_rgb(BLUE), width=1)
+        draw.text((bx1 + bpx, by1 + bpy), badge_text, font=f_badge, fill=_hex_to_rgb(BLUE))
 
-        _stat(0, y, "PRECIP",   f"{c.precipitation_in:.2f}in ({c.precipitation_mm:.1f}mm)")
-        _stat(1, y, "PRESSURE", f"{c.surface_pressure_hpa:.0f} hPa")
-        y += ROW_H
+        # ── Stat rows (right panel) ──────────────────────────────────────────
+        ROW_START = 58
+        ROW_H     = (H - ROW_START) // 7   # ≈ 60 px
 
-        _stat(0, y, "VISIBILITY", f"{c.visibility_miles:.1f}mi ({c.visibility_km:.1f}km)")
+        f_lbl = _font_mono(11)
+        f_val = _font_mono(13, medium=True)
 
-        # Footer
-        f_foot = _font(12)
-        footer = "ZipWx Bot  |  Data: Open-Meteo"
-        bbox   = draw.textbbox((0, 0), footer, font=f_foot)
-        fw     = bbox[2] - bbox[0]
-        draw.text((W - fw - 20, H - 20), footer, font=f_foot, fill=TEXT_SEC)
+        DOT_X  = SPLIT_X + 22
+        LBL_X  = SPLIT_X + 36
+        BAR_X1 = SPLIT_X + 6
+        BAR_X2 = W - 24
+        VAL_X  = W - 18
+
+        stats = [
+            ("HUMIDITY",
+             f"{c.humidity_pct:.0f}%",
+             "bar_blue",  c.humidity_pct),
+            ("CLOUD COVER",
+             f"{c.cloud_cover_pct:.0f}%",
+             "bar_amber", c.cloud_cover_pct),
+            ("WIND",
+             f"{c.wind_speed_mph:.0f} mph  \u00b7  {c.wind_speed_kph:.0f} km/h  {cardinal}",
+             "text", 0.0),
+            ("GUSTS",
+             f"{c.wind_gusts_mph:.0f} mph  \u00b7  {c.wind_gusts_kph:.0f} km/h",
+             "text", 0.0),
+            ("PRECIP",
+             f"{c.precipitation_in:.2f} in  \u00b7  {c.precipitation_mm:.1f} mm",
+             "text", 0.0),
+            ("PRESSURE",
+             f"{c.surface_pressure_hpa:.0f} hPa",
+             "text", 0.0),
+            ("VISIBILITY",
+             f"{c.visibility_miles:.1f} mi  \u00b7  {c.visibility_km:.1f} km",
+             "text", 0.0),
+        ]
+
+        for i, (label, value, kind, pct) in enumerate(stats):
+            ry  = ROW_START + i * ROW_H
+            rym = ry + ROW_H // 2
+
+            if i > 0:
+                draw.line([(SPLIT_X + 2, ry), (W, ry)],
+                          fill=_hex_to_rgb(SEP), width=1)
+
+            if kind.startswith("bar_"):
+                lbl_y    = ry + 12
+                bar_y    = ry + ROW_H * 2 // 3
+                dot_cy   = lbl_y + 6
+                dot_fill = _hex_to_rgb(BLUE) if kind == "bar_blue" else _hex_to_rgb(AMBER)
+                draw.ellipse([(DOT_X - 5, dot_cy - 5), (DOT_X + 5, dot_cy + 5)],
+                             fill=dot_fill)
+                draw.text((LBL_X, lbl_y), label, font=f_lbl, fill=TEXT_MUT)
+                bbox = draw.textbbox((0, 0), value, font=f_val)
+                vw   = bbox[2] - bbox[0]
+                draw.text((VAL_X - vw, lbl_y), value, font=f_val, fill=TEXT_PRI)
+                # Progress bar track
+                draw.rounded_rectangle(
+                    [(BAR_X1, bar_y - 2), (BAR_X2, bar_y + 2)],
+                    radius=2, fill=_hex_to_rgb(SEP))
+                # Progress bar fill
+                fill_w   = int((BAR_X2 - BAR_X1) * min(pct, 100.0) / 100.0)
+                bar_fill = _hex_to_rgb(BLUE) if kind == "bar_blue" else _hex_to_rgb(AMBER)
+                if fill_w > 4:
+                    draw.rounded_rectangle(
+                        [(BAR_X1, bar_y - 2), (BAR_X1 + fill_w, bar_y + 2)],
+                        radius=2, fill=bar_fill)
+            else:
+                draw.ellipse([(DOT_X - 5, rym - 5), (DOT_X + 5, rym + 5)],
+                             fill=_hex_to_rgb(TEXT_MUT))
+                draw.text((LBL_X, rym - 8), label, font=f_lbl, fill=TEXT_MUT)
+                bbox = draw.textbbox((0, 0), value, font=f_val)
+                vw   = bbox[2] - bbox[0]
+                draw.text((VAL_X - vw, rym - 8), value, font=f_val, fill=TEXT_PRI)
 
         return _to_png(img)
 
@@ -347,45 +449,59 @@ class WeatherImageFormatter:
         loc   = report.location.display_name
 
         hours  = [_hour_label(s.hour) for s in slots]
-        temps  = [s.temperature_f      for s in slots]
+        temps  = [s.temperature_f for s in slots]
         precip = [s.precipitation_probability_pct for s in slots]
+        xs     = range(len(hours))
 
-        fig, ax1 = plt.subplots(figsize=(10, 4), dpi=90)
+        fig, (ax_t, ax_p) = plt.subplots(
+            2, 1,
+            sharex=True,
+            figsize=(10, 5),
+            dpi=90,
+            layout="constrained",
+            gridspec_kw={"height_ratios": [2, 1], "hspace": 0.06},
+        )
         fig.patch.set_facecolor(BG)
-        ax1.set_facecolor(HEADER_BG)
 
-        # Left axis — temperature
-        line1, = ax1.plot(hours, temps, color=TEXT_AMB,
-                          linewidth=2, marker="o", markersize=6)
-        ax1.set_ylabel("Temperature (°F)", color=TEXT_AMB, fontsize=11)
-        ax1.tick_params(axis="y", colors=TEXT_AMB)
-        ax1.tick_params(axis="x", colors=TEXT_PRI)
-        for spine in ax1.spines.values():
+        # --- Top panel: temperature line ---
+        ax_t.set_facecolor(HEADER_BG)
+        ax_t.plot(xs, temps, color=TEXT_AMB, linewidth=2.5,
+                  marker="o", markersize=7, zorder=3)
+        for spine in ax_t.spines.values():
             spine.set_edgecolor(ACCENT)
+        ax_t.tick_params(axis="y", colors=TEXT_AMB, labelsize=11)
+        ax_t.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+        ax_t.set_ylabel("Temp (°F)", color=TEXT_AMB, fontsize=11)
+        ax_t.yaxis.label.set_color(TEXT_AMB)
+        ax_t.grid(axis="y", color=ACCENT, linestyle="--", linewidth=0.7, alpha=0.5)
+        ax_t.set_title(f"6-Hour Forecast  —  {loc}",
+                       color=TEXT_PRI, fontsize=13, pad=8)
 
-        # Value labels above each temp point
-        for x, y in zip(hours, temps):
-            ax1.annotate(f"{y:.0f}", (x, y), textcoords="offset points",
-                         xytext=(0, 8), ha="center", color=TEXT_AMB, fontsize=9)
+        # Value labels above each point
+        y_pad = (max(temps) - min(temps)) * 0.08 + 0.5 if len(temps) > 1 else 1
+        for x, y in zip(xs, temps):
+            ax_t.annotate(f"{y:.0f}", (x, y), textcoords="offset points",
+                          xytext=(0, 9), ha="center", color=TEXT_AMB, fontsize=10,
+                          fontweight="bold")
 
-        # Right axis — precip probability
-        ax2 = ax1.twinx()
-        ax2.set_facecolor(HEADER_BG)
-        line2, = ax2.plot(hours, precip, color=TEXT_SKY, linewidth=2,
-                          linestyle="--", marker="s", markersize=5)
-        ax2.set_ylabel("Precip Probability (%)", color=TEXT_SKY, fontsize=11)
-        ax2.tick_params(axis="y", colors=TEXT_SKY)
-        ax2.set_ylim(0, 100)
-        for spine in ax2.spines.values():
+        # --- Bottom panel: precip probability bars ---
+        ax_p.set_facecolor(HEADER_BG)
+        ax_p.bar(xs, precip, color=TEXT_SKY, alpha=0.75, width=0.6, zorder=3)
+        for spine in ax_p.spines.values():
             spine.set_edgecolor(ACCENT)
+        ax_p.tick_params(axis="y", colors=TEXT_SKY, labelsize=10)
+        ax_p.tick_params(axis="x", colors=TEXT_PRI, labelsize=11)
+        ax_p.set_ylabel("Precip %", color=TEXT_SKY, fontsize=11)
+        ax_p.set_ylim(0, 100)
+        ax_p.set_xticks(list(xs))
+        ax_p.set_xticklabels(hours)
+        ax_p.grid(axis="y", color=ACCENT, linestyle="--", linewidth=0.7, alpha=0.5)
 
-        # Grid on primary axis
-        ax1.grid(color=ACCENT, linestyle="--", linewidth=0.7, alpha=0.5)
-
-        # Title and tick styling
-        ax1.set_title(f"6-Hour Forecast  —  {loc}", color=TEXT_PRI, fontsize=13, pad=10)
-        ax1.xaxis.label.set_color(TEXT_PRI)
-        fig.tight_layout(pad=1.5)
+        # Value labels inside each bar (skip zero bars)
+        for x, p in zip(xs, precip):
+            if p >= 5:
+                ax_p.text(x, p + 2, f"{p:.0f}%", ha="center", va="bottom",
+                          color=TEXT_SKY, fontsize=9, fontweight="bold")
 
         buf = io.BytesIO()
         fig.savefig(buf, format="png", facecolor=fig.get_facecolor())

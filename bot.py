@@ -88,6 +88,7 @@ class ZipWx:
             if self._image_formatter is None:
                 logger.warning("[bot] Falling back to text mode.")
                 self._post_mode = "text"
+        logger.info("[bot] post_mode=%s", self._post_mode)
 
         # Alert channels (inputs)
         self._alert_channels: list[AlertChannel] = []
