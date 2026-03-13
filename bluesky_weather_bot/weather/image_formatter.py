@@ -155,6 +155,61 @@ def _hex_to_rgb(h: str) -> tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
+def _draw_icon(draw: ImageDraw.ImageDraw, cx: int, cy: int, r: int,
+               icon_type: str, color: tuple) -> None:
+    """Draw a small icon centered at (cx, cy) fitting within radius r."""
+    if icon_type == "drop":
+        # Teardrop: triangle pointing up + ellipse for the round bottom
+        draw.polygon([(cx, cy - r), (cx - r, cy), (cx + r, cy)], fill=color)
+        draw.ellipse([(cx - r, cy - r // 3), (cx + r, cy + r)], fill=color)
+
+    elif icon_type == "cloud":
+        # Three bumps on top + rectangle for flat base
+        bump_r = max(3, int(r * 0.55))
+        for ox, oy in ((-int(r * 0.5), 0), (0, -int(r * 0.35)), (int(r * 0.5), 0)):
+            draw.ellipse([(cx + ox - bump_r, cy + oy - bump_r),
+                          (cx + ox + bump_r, cy + oy + bump_r)], fill=color)
+        draw.rectangle([(cx - r, cy), (cx + r, cy + int(r * 0.6))], fill=color)
+
+    elif icon_type == "wind":
+        # Three horizontal lines of decreasing length
+        for j in range(3):
+            y_l = cy - r + j * (r * 2 // 3 + 1)
+            x1  = cx + r - j * (r // 2)
+            draw.line([(cx - r, y_l), (x1, y_l)], fill=color, width=2)
+
+    elif icon_type == "arrow_up":
+        # Upward arrow: triangle head + rectangular stem
+        stem = max(1, r // 3)
+        draw.polygon([(cx, cy - r), (cx - r, cy + r // 4), (cx + r, cy + r // 4)],
+                     fill=color)
+        draw.rectangle([(cx - stem, cy + r // 4), (cx + stem, cy + r)], fill=color)
+
+    elif icon_type == "rain":
+        # Three angled rain lines
+        spacing = r * 2 // 3
+        for j in range(3):
+            x0 = cx - r + j * spacing
+            draw.line([(x0, cy - r // 2), (x0 - r // 3, cy + r // 2)],
+                      fill=color, width=2)
+
+    elif icon_type == "gauge":
+        # Pressure gauge: semicircle arc + needle + pivot dot
+        draw.arc([(cx - r, cy - r // 2), (cx + r, cy + r + r // 2)],
+                 start=180, end=0, fill=color, width=2)
+        draw.line([(cx, cy + r // 4), (cx + r * 2 // 3, cy - r // 3)],
+                  fill=color, width=2)
+        draw.ellipse([(cx - 2, cy + r // 4 - 2), (cx + 2, cy + r // 4 + 2)],
+                     fill=color)
+
+    elif icon_type == "eye":
+        # Eye outline (ellipse) + filled pupil
+        draw.ellipse([(cx - r, cy - r // 2), (cx + r, cy + r // 2)],
+                     outline=color, width=2)
+        pr = max(2, r // 3)
+        draw.ellipse([(cx - pr, cy - pr), (cx + pr, cy + pr)], fill=color)
+
+
 def _text_centered(draw: ImageDraw.ImageDraw, y: int, text: str,
                    font: ImageFont.ImageFont, fill: str, width: int) -> int:
     """Draw text horizontally centred in [0, width]. Returns text height."""
@@ -360,27 +415,27 @@ class WeatherImageFormatter:
         VAL_X  = W - 20       # value right edge
 
         rows = [
-            ("HUMIDITY",      "blue",  c.humidity_pct,
+            ("HUMIDITY",      "blue",  "drop",     c.humidity_pct,
              f"{c.humidity_pct:.0f} %",    None),
-            ("CLOUD COVER",   "amber", c.cloud_cover_pct,
+            ("CLOUD COVER",   "amber", "cloud",    c.cloud_cover_pct,
              f"{c.cloud_cover_pct:.0f} %", None),
-            ("WIND",          "muted", None,
+            ("WIND",          "muted", "wind",     None,
              f"{c.wind_speed_mph:.0f} mph {cardinal}",
              f"  \u00b7  {c.wind_speed_kph:.0f} km/h"),
-            ("GUSTS",         "muted", None,
+            ("GUSTS",         "muted", "arrow_up", None,
              f"{c.wind_gusts_mph:.0f} mph",
              f"  \u00b7  {c.wind_gusts_kph:.0f} km/h"),
-            ("PRECIPITATION", "muted", None,
+            ("PRECIPITATION", "muted", "rain",     None,
              f"{c.precipitation_in:.2f} in",
              f"  \u00b7  {c.precipitation_mm:.1f} mm"),
-            ("PRESSURE",      "muted", None,
+            ("PRESSURE",      "muted", "gauge",    None,
              f"{c.surface_pressure_hpa:.0f} hPa", None),
-            ("VISIBILITY",    "muted", None,
+            ("VISIBILITY",    "muted", "eye",      None,
              f"{c.visibility_miles:.1f} mi",
              f"  \u00b7  {c.visibility_km:.1f} km"),
         ]
 
-        for i, (label, icon_color, bar_pct, pri_val, sec_val) in enumerate(rows):
+        for i, (label, icon_color, icon_type, bar_pct, pri_val, sec_val) in enumerate(rows):
             ry  = ROW_Y0 + i * ROW_H
             rym = ry + ROW_H // 2
 
@@ -388,13 +443,17 @@ class WeatherImageFormatter:
                 draw.line([(RS_X, ry), (W, ry)],
                           fill=_hex_to_rgb(SEP), width=1)
 
-            # Icon: 26×26 rounded square with tinted background
-            ic = ((18, 42, 80)  if icon_color == "blue"  else
-                  (55, 36, 14)  if icon_color == "amber" else
-                  (28, 40, 62))
+            # Icon: 26×26 rounded square with tinted background + symbol
+            ic_bg  = ((18, 42, 80)  if icon_color == "blue"  else
+                      (55, 36, 14)  if icon_color == "amber" else
+                      (28, 40, 62))
+            ic_clr = (_hex_to_rgb(BLUE)     if icon_color == "blue"  else
+                      _hex_to_rgb(AMBER)    if icon_color == "amber" else
+                      _hex_to_rgb(TEXT_MUT))
             draw.rounded_rectangle(
                 [(ICON_X - 13, rym - 13), (ICON_X + 13, rym + 13)],
-                radius=6, fill=ic)
+                radius=6, fill=ic_bg)
+            _draw_icon(draw, ICON_X, rym, 7, icon_type, ic_clr)
 
             # Label
             draw.text((LBL_X, rym - 7), label, font=f_lbl, fill=TEXT_MUT)
@@ -496,57 +555,67 @@ class WeatherImageFormatter:
         hours  = [_hour_label(s.hour) for s in slots]
         temps  = [s.temperature_f for s in slots]
         precip = [s.precipitation_probability_pct for s in slots]
+        rh     = [s.humidity_pct for s in slots]
+        winds  = [s.wind_speed_mph for s in slots]
         xs     = range(len(hours))
 
-        fig, (ax_t, ax_p) = plt.subplots(
-            2, 1,
+        GREEN  = "#34d399"   # RH line
+        PURPLE = "#a78bfa"   # wind line
+
+        fig, (ax_t, ax_p, ax_rh, ax_w) = plt.subplots(
+            4, 1,
             sharex=True,
-            figsize=(10, 5),
+            figsize=(10, 7),
             dpi=90,
             layout="constrained",
-            gridspec_kw={"height_ratios": [2, 1], "hspace": 0.06},
+            gridspec_kw={"height_ratios": [2, 1, 1, 1]},
         )
         fig.patch.set_facecolor(BG)
 
-        # --- Top panel: temperature line ---
-        ax_t.set_facecolor(HEADER_BG)
+        def _style_ax(ax, y_color):
+            ax.set_facecolor(HEADER_BG)
+            for spine in ax.spines.values():
+                spine.set_edgecolor(ACCENT)
+            ax.tick_params(axis="y", colors=y_color, labelsize=10)
+            ax.grid(axis="y", color=ACCENT, linestyle="--", linewidth=0.7, alpha=0.5)
+
+        # --- Panel 1: Temperature ---
+        _style_ax(ax_t, TEXT_AMB)
         ax_t.plot(xs, temps, color=TEXT_AMB, linewidth=2.5,
                   marker="o", markersize=7, zorder=3)
-        for spine in ax_t.spines.values():
-            spine.set_edgecolor(ACCENT)
-        ax_t.tick_params(axis="y", colors=TEXT_AMB, labelsize=11)
         ax_t.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
-        ax_t.set_ylabel("Temp (°F)", color=TEXT_AMB, fontsize=11)
-        ax_t.yaxis.label.set_color(TEXT_AMB)
-        ax_t.grid(axis="y", color=ACCENT, linestyle="--", linewidth=0.7, alpha=0.5)
-        ax_t.set_title(f"6-Hour Forecast  —  {loc}",
-                       color=TEXT_PRI, fontsize=13, pad=8)
-
-        # Value labels above each point
-        y_pad = (max(temps) - min(temps)) * 0.08 + 0.5 if len(temps) > 1 else 1
+        ax_t.set_ylabel("Temp (°F)", color=TEXT_AMB, fontsize=10)
+        ax_t.set_title(f"6-Hour Forecast  —  {loc}", color=TEXT_PRI, fontsize=13, pad=8)
         for x, y in zip(xs, temps):
             ax_t.annotate(f"{y:.0f}", (x, y), textcoords="offset points",
                           xytext=(0, 9), ha="center", color=TEXT_AMB, fontsize=10,
                           fontweight="bold")
 
-        # --- Bottom panel: precip probability bars ---
-        ax_p.set_facecolor(HEADER_BG)
+        # --- Panel 2: Precip probability ---
+        _style_ax(ax_p, TEXT_SKY)
         ax_p.bar(xs, precip, color=TEXT_SKY, alpha=0.75, width=0.6, zorder=3)
-        for spine in ax_p.spines.values():
-            spine.set_edgecolor(ACCENT)
-        ax_p.tick_params(axis="y", colors=TEXT_SKY, labelsize=10)
-        ax_p.tick_params(axis="x", colors=TEXT_PRI, labelsize=11)
-        ax_p.set_ylabel("Precip %", color=TEXT_SKY, fontsize=11)
+        ax_p.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+        ax_p.set_ylabel("Precip %", color=TEXT_SKY, fontsize=10)
         ax_p.set_ylim(0, 100)
-        ax_p.set_xticks(list(xs))
-        ax_p.set_xticklabels(hours)
-        ax_p.grid(axis="y", color=ACCENT, linestyle="--", linewidth=0.7, alpha=0.5)
-
-        # Value labels inside each bar (skip zero bars)
         for x, p in zip(xs, precip):
             if p >= 5:
                 ax_p.text(x, p + 2, f"{p:.0f}%", ha="center", va="bottom",
                           color=TEXT_SKY, fontsize=9, fontweight="bold")
+
+        # --- Panel 3: Relative Humidity ---
+        _style_ax(ax_rh, GREEN)
+        ax_rh.plot(xs, rh, color=GREEN, linewidth=2, marker="s", markersize=5, zorder=3)
+        ax_rh.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+        ax_rh.set_ylabel("RH %", color=GREEN, fontsize=10)
+        ax_rh.set_ylim(0, 100)
+
+        # --- Panel 4: Wind speed ---
+        _style_ax(ax_w, PURPLE)
+        ax_w.plot(xs, winds, color=PURPLE, linewidth=2, marker="^", markersize=5, zorder=3)
+        ax_w.tick_params(axis="x", colors=TEXT_PRI, labelsize=11)
+        ax_w.set_ylabel("Wind\n(mph)", color=PURPLE, fontsize=10)
+        ax_w.set_xticks(list(xs))
+        ax_w.set_xticklabels(hours)
 
         buf = io.BytesIO()
         fig.savefig(buf, format="png", facecolor=fig.get_facecolor())

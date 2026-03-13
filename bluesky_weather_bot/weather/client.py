@@ -45,7 +45,7 @@ CURRENT_VARS = (
 
 HOURLY_VARS = (
     "temperature_2m,precipitation_probability,precipitation,"
-    "wind_speed_10m,cloud_cover,weather_code"
+    "wind_speed_10m,cloud_cover,weather_code,relative_humidity_2m"
 )
 
 DAILY_VARS = (
@@ -176,6 +176,7 @@ class WeatherClient:
         winds        = h.get("wind_speed_10m", [])
         covers       = h.get("cloud_cover", [])
         codes        = h.get("weather_code", [])
+        humidities   = h.get("relative_humidity_2m", [])
 
         slots = []
         for i, t in enumerate(times):
@@ -193,6 +194,7 @@ class WeatherClient:
                 wind_speed_kph=_mph_to_kph(wind_mph),
                 cloud_cover_pct=_f(_at(covers, i)),
                 weather_description=wmo_description(int(_at(codes, i) or 0)),
+                humidity_pct=_f(_at(humidities, i)),
             ))
         return Forecast(slots=slots)
 

@@ -58,6 +58,7 @@ class HourlyForecastSlot:
     wind_speed_kph: float
     cloud_cover_pct: float
     weather_description: str
+    humidity_pct: float = 0.0
 
 
 @dataclass
