@@ -268,33 +268,37 @@ class WeatherImageFormatter:
         # ── Left panel ───────────────────────────────────────────────────────
         draw.rectangle([(0, 0), (SPLIT_X - 1, H)], fill=_hex_to_rgb(PANEL_L))
 
-        f_loc  = _font_syne(22)
-        f_ts   = _font_mono(11)
-        f_big  = _font_syne(66)
-        f_degc = _font_mono(21)
-        f_fl   = _font_mono(12)
+        draw.text((18, 26), loc,    font=_font_syne(24), fill=TEXT_PRI)
+        draw.text((18, 62), ts_str, font=_font_mono(11), fill=TEXT_MUT)
 
-        draw.text((18, 28), loc,    font=f_loc, fill=TEXT_PRI)
-        draw.text((18, 60), ts_str, font=f_ts,  fill=TEXT_MUT)
+        # Temperature: large number + smaller "°F" side-by-side
+        f_num  = _font_syne(100)
+        f_unit = _font_syne(46)
+        num_str  = f"{c.temperature_f:.0f}"
+        unit_str = "\u00b0F"
+        nb = draw.textbbox((0, 0), num_str,  font=f_num)
+        ub = draw.textbbox((0, 0), unit_str, font=f_unit)
+        nw      = nb[2] - nb[0]   # glyph width
+        n_bot   = nb[3]            # bottom of glyph relative to draw origin (= 110)
+        uw      = ub[2] - ub[0]
+        ty      = 130
+        tx      = max(8, (SPLIT_X - nw - 4 - uw) // 2)
+        # "°F" top-aligned to the number's glyph top (nb[1]=43)
+        unit_y  = ty + nb[1] - ub[1]
+        draw.text((tx,           ty),     num_str,  font=f_num,  fill=AMBER)
+        draw.text((tx + nw + 4,  unit_y), unit_str, font=f_unit, fill=AMBER)
 
-        temp_str = f"{c.temperature_f:.0f}\u00b0F"
-        tbbox    = draw.textbbox((0, 0), temp_str, font=f_big)
-        tw       = tbbox[2] - tbbox[0]
-        th       = tbbox[3] - tbbox[1]
-        tx       = max(8, (SPLIT_X - tw) // 2)
-        ty       = 118
-        draw.text((tx, ty), temp_str, font=f_big, fill=AMBER)
-
-        degc_str = f"{c.temperature_c:.0f}\u00b0C"
-        _text_centered(draw, ty + th + 10, degc_str, f_degc, TEXT_MUT, SPLIT_X)
-
-        fl_str = f"FEELS LIKE {c.feels_like_f:.0f}\u00b0F"
-        _text_centered(draw, ty + th + 40, fl_str, f_fl, TEXT_MUT, SPLIT_X)
+        _text_centered(draw, ty + n_bot + 16,
+                       f"{c.temperature_c:.0f}\u00b0C",
+                       _font_mono(20), TEXT_MUT, SPLIT_X)
+        _text_centered(draw, ty + n_bot + 46,
+                       f"FEELS LIKE {c.feels_like_f:.0f}\u00b0F",
+                       _font_mono(12), TEXT_MUT, SPLIT_X)
 
         # ── Panel separator ──────────────────────────────────────────────────
         draw.rectangle([(SPLIT_X, 0), (SPLIT_X + 1, H)], fill=_hex_to_rgb(SEP))
 
-        # ── Condition badge (top-right of right panel) ───────────────────────
+        # ── Condition badge (top-right) ──────────────────────────────────────
         f_badge    = _font_mono(11, medium=True)
         badge_text = c.weather_description.upper()[:24]
         bbbox      = draw.textbbox((0, 0), badge_text, font=f_badge)
@@ -302,50 +306,49 @@ class WeatherImageFormatter:
         bpx, bpy   = 12, 5
         bx2        = W - 18
         bx1        = bx2 - bw - 2 * bpx
-        by1        = 18
-        by2        = by1 + bh + 2 * bpy
+        by1, by2   = 18, 18 + bh + 2 * bpy
         draw.rounded_rectangle([(bx1, by1), (bx2, by2)], radius=10,
                                 fill=(13, 28, 71), outline=_hex_to_rgb(BLUE), width=1)
-        draw.text((bx1 + bpx, by1 + bpy), badge_text, font=f_badge, fill=_hex_to_rgb(BLUE))
+        draw.text((bx1 + bpx, by1 + bpy), badge_text,
+                  font=f_badge, fill=_hex_to_rgb(BLUE))
 
         # ── Stat rows (right panel) ──────────────────────────────────────────
         ROW_START = 58
         ROW_H     = (H - ROW_START) // 7   # ≈ 60 px
 
         f_lbl = _font_mono(11)
-        f_val = _font_mono(13, medium=True)
+        f_pri = _font_mono(15, medium=True)   # primary value (white)
+        f_sec = _font_mono(12)                # metric value (muted)
 
-        DOT_X  = SPLIT_X + 22
-        LBL_X  = SPLIT_X + 36
-        BAR_X1 = SPLIT_X + 6
-        BAR_X2 = W - 24
-        VAL_X  = W - 18
+        ICON_X = SPLIT_X + 20   # center of icon square
+        LBL_X  = SPLIT_X + 36   # label left edge
+        BAR_X1 = W - 230        # progress bar start (inline, right side)
+        BAR_X2 = W - 90         # progress bar end
+        VAL_X  = W - 16         # right edge for all values
 
-        stats = [
-            ("HUMIDITY",
-             f"{c.humidity_pct:.0f}%",
-             "bar_blue",  c.humidity_pct),
-            ("CLOUD COVER",
-             f"{c.cloud_cover_pct:.0f}%",
-             "bar_amber", c.cloud_cover_pct),
-            ("WIND",
-             f"{c.wind_speed_mph:.0f} mph  \u00b7  {c.wind_speed_kph:.0f} km/h  {cardinal}",
-             "text", 0.0),
-            ("GUSTS",
-             f"{c.wind_gusts_mph:.0f} mph  \u00b7  {c.wind_gusts_kph:.0f} km/h",
-             "text", 0.0),
-            ("PRECIP",
-             f"{c.precipitation_in:.2f} in  \u00b7  {c.precipitation_mm:.1f} mm",
-             "text", 0.0),
-            ("PRESSURE",
-             f"{c.surface_pressure_hpa:.0f} hPa",
-             "text", 0.0),
-            ("VISIBILITY",
-             f"{c.visibility_miles:.1f} mi  \u00b7  {c.visibility_km:.1f} km",
-             "text", 0.0),
+        # (label, icon_color, bar_pct_or_None, primary_str, secondary_str_or_None)
+        rows = [
+            ("HUMIDITY",      "blue",  c.humidity_pct,
+             f"{c.humidity_pct:.0f} %",    None),
+            ("CLOUD COVER",   "amber", c.cloud_cover_pct,
+             f"{c.cloud_cover_pct:.0f} %", None),
+            ("WIND",          "muted", None,
+             f"{c.wind_speed_mph:.0f} mph {cardinal}",
+             f"  \u00b7  {c.wind_speed_kph:.0f} km/h"),
+            ("GUSTS",         "muted", None,
+             f"{c.wind_gusts_mph:.0f} mph",
+             f"  \u00b7  {c.wind_gusts_kph:.0f} km/h"),
+            ("PRECIPITATION", "muted", None,
+             f"{c.precipitation_in:.2f} in",
+             f"  \u00b7  {c.precipitation_mm:.1f} mm"),
+            ("PRESSURE",      "muted", None,
+             f"{c.surface_pressure_hpa:.0f} hPa", None),
+            ("VISIBILITY",    "muted", None,
+             f"{c.visibility_miles:.1f} mi",
+             f"  \u00b7  {c.visibility_km:.1f} km"),
         ]
 
-        for i, (label, value, kind, pct) in enumerate(stats):
+        for i, (label, icon_color, bar_pct, pri_val, sec_val) in enumerate(rows):
             ry  = ROW_START + i * ROW_H
             rym = ry + ROW_H // 2
 
@@ -353,35 +356,49 @@ class WeatherImageFormatter:
                 draw.line([(SPLIT_X + 2, ry), (W, ry)],
                           fill=_hex_to_rgb(SEP), width=1)
 
-            if kind.startswith("bar_"):
-                lbl_y    = ry + 12
-                bar_y    = ry + ROW_H * 2 // 3
-                dot_cy   = lbl_y + 6
-                dot_fill = _hex_to_rgb(BLUE) if kind == "bar_blue" else _hex_to_rgb(AMBER)
-                draw.ellipse([(DOT_X - 5, dot_cy - 5), (DOT_X + 5, dot_cy + 5)],
-                             fill=dot_fill)
-                draw.text((LBL_X, lbl_y), label, font=f_lbl, fill=TEXT_MUT)
-                bbox = draw.textbbox((0, 0), value, font=f_val)
-                vw   = bbox[2] - bbox[0]
-                draw.text((VAL_X - vw, lbl_y), value, font=f_val, fill=TEXT_PRI)
-                # Progress bar track
+            # Small rounded-square icon
+            ic = _hex_to_rgb(BLUE  if icon_color == "blue"  else
+                             AMBER if icon_color == "amber" else TEXT_MUT)
+            draw.rounded_rectangle(
+                [(ICON_X - 7, rym - 7), (ICON_X + 7, rym + 7)],
+                radius=3, fill=ic)
+
+            # Label (vertically centered)
+            draw.text((LBL_X, rym - 7), label, font=f_lbl, fill=TEXT_MUT)
+
+            if bar_pct is not None:
+                # Inline progress bar + percentage value to its right
+                bar_fill = _hex_to_rgb(BLUE if icon_color == "blue" else AMBER)
                 draw.rounded_rectangle(
-                    [(BAR_X1, bar_y - 2), (BAR_X2, bar_y + 2)],
+                    [(BAR_X1, rym - 2), (BAR_X2, rym + 2)],
                     radius=2, fill=_hex_to_rgb(SEP))
-                # Progress bar fill
-                fill_w   = int((BAR_X2 - BAR_X1) * min(pct, 100.0) / 100.0)
-                bar_fill = _hex_to_rgb(BLUE) if kind == "bar_blue" else _hex_to_rgb(AMBER)
+                fill_w = int((BAR_X2 - BAR_X1) * min(bar_pct, 100.0) / 100.0)
                 if fill_w > 4:
                     draw.rounded_rectangle(
-                        [(BAR_X1, bar_y - 2), (BAR_X1 + fill_w, bar_y + 2)],
+                        [(BAR_X1, rym - 2), (BAR_X1 + fill_w, rym + 2)],
                         radius=2, fill=bar_fill)
+                bbox = draw.textbbox((0, 0), pri_val, font=f_pri)
+                pw   = bbox[2] - bbox[0]
+                ph   = bbox[3] - bbox[1]
+                draw.text((VAL_X - pw, rym - ph // 2), pri_val,
+                          font=f_pri, fill=TEXT_PRI)
+            elif sec_val:
+                # Two-tone: primary (white, larger) + metric (muted, smaller)
+                bp = draw.textbbox((0, 0), pri_val, font=f_pri)
+                bs = draw.textbbox((0, 0), sec_val, font=f_sec)
+                pw, ph = bp[2] - bp[0], bp[3] - bp[1]
+                sw, sh = bs[2] - bs[0], bs[3] - bs[1]
+                x_sec = VAL_X - sw
+                x_pri = x_sec - pw
+                draw.text((x_pri, rym - ph // 2), pri_val, font=f_pri, fill=TEXT_PRI)
+                draw.text((x_sec, rym - sh // 2), sec_val, font=f_sec, fill=TEXT_MUT)
             else:
-                draw.ellipse([(DOT_X - 5, rym - 5), (DOT_X + 5, rym + 5)],
-                             fill=_hex_to_rgb(TEXT_MUT))
-                draw.text((LBL_X, rym - 8), label, font=f_lbl, fill=TEXT_MUT)
-                bbox = draw.textbbox((0, 0), value, font=f_val)
-                vw   = bbox[2] - bbox[0]
-                draw.text((VAL_X - vw, rym - 8), value, font=f_val, fill=TEXT_PRI)
+                # Single value, right-aligned
+                bbox = draw.textbbox((0, 0), pri_val, font=f_pri)
+                pw   = bbox[2] - bbox[0]
+                ph   = bbox[3] - bbox[1]
+                draw.text((VAL_X - pw, rym - ph // 2), pri_val,
+                          font=f_pri, fill=TEXT_PRI)
 
         return _to_png(img)
 
