@@ -307,8 +307,8 @@ class WeatherImageFormatter:
         # Portrait layout — optimised for phone viewing
         W      = 720
         H      = 1000
-        H_HDR  = 80    # header strip
-        TEMP_H = 190   # temperature block below header
+        H_HDR  = 100   # header strip
+        TEMP_H = 240   # temperature block below header
 
         img, draw = _new_card(W, H)
 
@@ -328,8 +328,8 @@ class WeatherImageFormatter:
         # ── Header ────────────────────────────────────────────────────────────
         draw.rectangle([(0, 0), (W, H_HDR)], fill=_hex_to_rgb(HDR_BG))
         draw.line([(0, H_HDR), (W, H_HDR)], fill=_hex_to_rgb(BORDER), width=1)
-        draw.text((20, 16), loc,    font=_font_syne(24), fill=TEXT_PRI)
-        draw.text((20, 52), ts_str, font=_font_mono(13), fill=TEXT_MUT)
+        draw.text((20, 10), loc,    font=_font_syne(24), fill=TEXT_PRI)
+        draw.text((20, 52), ts_str, font=_font_mono(26), fill=TEXT_MUT)
 
         # Condition badge — pill, right-aligned
         f_badge    = _font_syne(16)
@@ -353,8 +353,8 @@ class WeatherImageFormatter:
 
         f_num    = _font_syne(80)
         f_unit   = _font_syne(36)
-        f_tc_num = _font_syne(28)
-        f_tc_u   = _font_syne(18)
+        f_tc_num = _font_syne(56)
+        f_tc_u   = _font_syne(36)
 
         num_str  = f"{c.temperature_f:.0f}"
         unit_str = "\u00b0F"
