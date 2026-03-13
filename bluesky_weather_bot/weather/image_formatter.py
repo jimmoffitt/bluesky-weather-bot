@@ -306,7 +306,7 @@ class WeatherImageFormatter:
     def _render_current_card(self, report: WeatherReport) -> bytes:
         W      = 800
         H      = 480
-        H_HDR  = 72    # full-width header strip height
+        H_HDR  = 80    # full-width header strip height
         PL_W   = 220   # left (temp) panel width
         RS_X   = PL_W  # right panel start x
 
@@ -328,11 +328,11 @@ class WeatherImageFormatter:
         # ── Full-width header ─────────────────────────────────────────────────
         draw.rectangle([(0, 0), (W, H_HDR)], fill=_hex_to_rgb(HDR_BG))
         draw.line([(0, H_HDR), (W, H_HDR)], fill=_hex_to_rgb(BORDER), width=1)
-        draw.text((22, 20), loc,    font=_font_syne(20), fill=TEXT_PRI)
-        draw.text((22, 48), ts_str, font=_font_mono(11), fill=TEXT_MUT)
+        draw.text((22, 16), loc,    font=_font_syne(24), fill=TEXT_PRI)
+        draw.text((22, 52), ts_str, font=_font_mono(13), fill=TEXT_MUT)
 
         # Condition badge — pill shape, Syne font, right-aligned in header
-        f_badge    = _font_syne(13)
+        f_badge    = _font_syne(16)
         badge_text = c.weather_description[:24]
         bbbox      = draw.textbbox((0, 0), badge_text, font=f_badge)
         bw, bh     = bbbox[2] - bbbox[0], bbbox[3] - bbbox[1]
@@ -398,21 +398,21 @@ class WeatherImageFormatter:
         # Feels like
         _text_centered(draw, div_y + 10,
                        f"FEELS LIKE  {c.feels_like_f:.0f}\u00b0F",
-                       _font_mono(11), TEXT_MUT, PL_W)
+                       _font_mono(13), TEXT_MUT, PL_W)
 
         # ── Right stats panel ─────────────────────────────────────────────────
         ROW_H  = PL_H // 7   # ≈ 58 px
         ROW_Y0 = H_HDR
 
-        f_lbl = _font_mono(11)
-        f_pri = _font_mono(14, medium=True)
-        f_sec = _font_mono(12)
+        f_lbl = _font_mono(14)
+        f_pri = _font_mono(18, medium=True)
+        f_sec = _font_mono(15)
 
-        ICON_X = RS_X + 22    # icon centre x
-        LBL_X  = RS_X + 52    # label left edge (after 26px icon + gap)
-        BAR_X1 = RS_X + 300   # bar start
-        BAR_X2 = W - 80       # bar end
-        VAL_X  = W - 20       # value right edge
+        ICON_X = RS_X + 24    # icon centre x
+        LBL_X  = RS_X + 56    # label left edge (after 26px icon + gap)
+        BAR_X1 = RS_X + 185   # bar start (tighter — was +300)
+        BAR_X2 = W - 95       # bar end
+        VAL_X  = W - 14       # value right edge
 
         rows = [
             ("HUMIDITY",      "blue",  "drop",     c.humidity_pct,
