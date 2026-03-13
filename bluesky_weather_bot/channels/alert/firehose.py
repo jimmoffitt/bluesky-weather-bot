@@ -59,6 +59,7 @@ class FirehoseAlertChannel(AlertChannel):
     def __init__(self, settings: Settings) -> None:
         super().__init__()
         self._bot_handle = settings.bluesky_handle.lower().lstrip("@")
+        self._bot_did: Optional[str] = self._resolve_bot_did(self._bot_handle)
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._seen_uris: set[str] = set()
@@ -118,6 +119,10 @@ class FirehoseAlertChannel(AlertChannel):
                 if not commit.blocks:
                     return
                 car = CAR.from_bytes(commit.blocks)
+                # Skip posts authored by the bot itself to avoid feedback loops
+                if self._bot_did and commit.repo == self._bot_did:
+                    return
+
                 for op in commit.ops:
                     if op.action != "create":
                         continue
@@ -162,6 +167,25 @@ class FirehoseAlertChannel(AlertChannel):
                     break
                 logger.warning("[firehose] Reconnecting after error: %s", exc)
                 self._stop_event.wait(timeout=5)
+
+    @staticmethod
+    def _resolve_bot_did(handle: str) -> Optional[str]:
+        """Resolve handle → DID once at startup so we can filter own posts."""
+        import urllib.request as _ur
+        import urllib.parse as _up
+        import json as _json
+        url = (
+            "https://bsky.social/xrpc/com.atproto.identity.resolveHandle"
+            f"?handle={_up.quote(handle)}"
+        )
+        try:
+            with _ur.urlopen(url, timeout=10) as resp:
+                did = _json.loads(resp.read()).get("did")
+                logger.info("[firehose] Bot DID resolved: %s", did)
+                return did
+        except Exception as exc:
+            logger.warning("[firehose] Could not resolve bot DID: %s", exc)
+            return None
 
     def _is_trigger(self, text: str) -> bool:
         """Returns True if the post text contains a valid bot trigger."""
