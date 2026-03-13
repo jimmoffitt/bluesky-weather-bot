@@ -61,6 +61,8 @@ class FirehoseAlertChannel(AlertChannel):
         self._bot_handle = settings.bluesky_handle.lower().lstrip("@")
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._seen_uris: set[str] = set()
+        self._seen_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # AlertChannel interface
@@ -135,6 +137,14 @@ class FirehoseAlertChannel(AlertChannel):
                             op=op,
                         )
                         if request:
+                            if request.reply_to_uri:
+                                with self._seen_lock:
+                                    if request.reply_to_uri in self._seen_uris:
+                                        logger.debug("[firehose] Dedup: skipping %s", request.reply_to_uri)
+                                        continue
+                                    self._seen_uris.add(request.reply_to_uri)
+                                    if len(self._seen_uris) > 10_000:
+                                        self._seen_uris.clear()
                             self._dispatch(request)
             except Exception as exc:
                 logger.debug("[firehose] Skipping malformed message: %s", exc)

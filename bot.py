@@ -210,6 +210,8 @@ class ZipWx:
             if use_images:
                 images, alts, caption = self._image_formatter.format_images(report)
                 thread_posts = [caption]
+                # Send only the first image (portrait conditions card) so it
+                # fills the phone screen rather than appearing side-by-side.
                 payload = NotificationPayload(
                     request_db_id=db_id,
                     post_thread=thread_posts,
@@ -217,8 +219,8 @@ class ZipWx:
                     reply_to_cid=request.reply_to_cid,
                     recipient_handle=request.requester_handle,
                     target_channel=target_channel,
-                    post_images=images,
-                    post_image_alts=alts,
+                    post_images=images[:1],
+                    post_image_alts=alts[:1],
                 )
             else:
                 thread_posts = self._formatter.format_thread(report)
