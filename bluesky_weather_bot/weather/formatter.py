@@ -140,7 +140,6 @@ class WeatherFormatter:
             f"💧 Humidity: {c.humidity_pct:.0f}%",
             wind_str,
             precip_str,
-            f"👁 Visibility: {c.visibility_miles:.1f}mi ({c.visibility_km:.1f}km)",
             f"📊 Pressure: {c.surface_pressure_hpa:.0f}hPa",
         ]
         return "\n".join(lines)

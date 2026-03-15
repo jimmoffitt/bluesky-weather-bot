@@ -8,30 +8,32 @@ or a 3-post text thread — your choice.
 
 **Image mode** (`POST_MODE=image`) — a single portrait card posted as a reply:
 
-<img src="docs/screenshot_image_card.png" width="300" alt="Weather image card for Denver, CO showing 54°F clear sky with humidity, wind, pressure and visibility stats">
+<img src="docs/screenshot_image_card.png" width="300" alt="Weather image card for Denver, CO showing 58°F clear sky with humidity, wind, gusts, precip and pressure stats">
 
 **Text mode** (`POST_MODE=text`) — a 3-post thread (also used for DM replies):
 
 ```
-📍 New York, NY | Fri Mar 13 1:30 AM EDT
+📍 New York, NY | Sat Mar 14 10:15 PM EDT
 ☀️ Clear sky
-🌡 32°F (0°C) | Feels 24°F (-4°C)
-💧 Humidity: 72%
-💨 Wind: 8mph (12km/h) W | Gusts 22mph (35km/h)
+🌡 41°F (5°C) | Feels 32°F (-0°C)
+💧 Humidity: 41%
+💨 Wind: 9mph (14km/h) NNW | Gusts 18mph (29km/h)
 🌧 Precip: 0.00in (0.0mm)
-👁 Visibility: 49.9mi (80.4km)
-📊 Pressure: 1016hPa
+📊 Pressure: 1022hPa
 ---
 ⏱ Next 6 Hours — New York, NY
-1AM: 32°F, ☁ 0%, 💧 0%, 💨 8mph
-2AM: 32°F, ☁ 0%, 💧 0%, 💨 6mph
-...
+10PM: 41°F, ☁ 5%, 💧 0%, 💨 9mph
+11PM: 39°F, ☁ 4%, 💧 0%, 💨 7mph
+12AM: 37°F, ☁ 50%, 💧 0%, 💨 4mph
+1AM: 35°F, ☁ 18%, 💧 0%, 💨 5mph
+2AM: 34°F, ☁ 32%, 💧 1%, 💨 4mph
+3AM: 34°F, ☁ 100%, 💧 1%, 💨 3mph
 ---
 📅 Historical — New York, NY
-Last year (Mar 12, 2025):
-  Hi 52°F (11°C) / Lo 38°F (3°C) | Precip 0.00in
+Last year (Mar 14, 2025):
+  Hi 55°F (13°C) / Lo 33°F (1°C) | Precip 0.00in
 10-yr avg (Mar ±7d):
-  Hi 56°F (13°C) / Lo 38°F (3°C) | Precip 0.20in
+  Hi 57°F (14°C) / Lo 38°F (3°C) | Precip 0.14in
 ```
 
 ## Quick start

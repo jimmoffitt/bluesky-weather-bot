@@ -156,9 +156,9 @@ class TestPost1:
         post = formatter._post1_current(report)
         assert "1015hPa" in post
 
-    def test_contains_visibility(self, formatter, report):
+    def test_contains_pressure(self, formatter, report):
         post = formatter._post1_current(report)
-        assert "10.0mi" in post
+        assert "hPa" in post
 
     def test_within_limit(self, formatter, report):
         post = formatter._post1_current(report)
