@@ -252,6 +252,7 @@ class ZipWx:
             if use_images:
                 images, alts, caption = self._image_formatter.format_images(report, units=units)
                 thread_posts = [caption]
+                _append_latency_footer(thread_posts, request.received_at)
                 # Send only the first image (portrait conditions card) so it
                 # fills the phone screen rather than appearing side-by-side.
                 payload = NotificationPayload(

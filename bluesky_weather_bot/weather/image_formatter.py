@@ -365,10 +365,10 @@ class WeatherImageFormatter:
         draw.line([(0, H_HDR + TEMP_H), (W, H_HDR + TEMP_H)],
                   fill=_hex_to_rgb(BORDER), width=1)
 
-        f_num    = _font_syne(104)
-        f_unit   = _font_syne(47)
-        f_tc_num = _font_syne(73)
-        f_tc_u   = _font_syne(47)
+        f_num    = _font_syne(94)
+        f_unit   = _font_syne(42)
+        f_tc_num = _font_syne(66)
+        f_tc_u   = _font_syne(42)
 
         metric = (units == "metric")
         pri_num  = f"{c.temperature_c:.0f}" if metric else f"{c.temperature_f:.0f}"
@@ -406,7 +406,7 @@ class WeatherImageFormatter:
         # "FEELS LIKE"
         _text_centered(draw, baseline + 10,
                        f"FEELS LIKE  {feels_val}{feels_u}",
-                       _font_mono(18), TEXT_MUT, W)
+                       _font_mono(27), TEXT_MUT, W)
 
         # ── Stats rows — single row per metric ────────────────────────────────
         STATS_Y0 = H_HDR + TEMP_H

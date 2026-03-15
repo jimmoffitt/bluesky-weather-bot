@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather Display</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --card: #141b26;
+    --card2: #19223a;
+    --border: rgba(99, 140, 200, 0.15);
+    --accent: #6ea8fe;
+    --accent2: #f7a14b;
+    --text: #e2eaf7;
+    --muted: #6b7fa3;
+    --divider: rgba(99,140,200,0.10);
+    --glow: rgba(110,168,254,0.12);
+  }
+
+  body {
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'DM Mono', monospace;
+    padding: 2rem;
+  }
+
+  .card {
+    width: 820px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px rgba(110,168,254,0.06),
+      0 8px 40px rgba(0,0,0,0.5),
+      0 0 80px rgba(110,168,254,0.04);
+    animation: fadeUp 0.6s ease both;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Header ── */
+  .header {
+    background: linear-gradient(135deg, #111827 0%, #162032 60%, #0f1a2e 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 18px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 60% 100% at 80% 50%, rgba(110,168,254,0.07), transparent);
+    pointer-events: none;
+  }
+
+  .location-block { display: flex; flex-direction: column; gap: 3px; }
+
+  .location {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0.02em;
+  }
+
+  .timestamp {
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .condition-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(110,168,254,0.08);
+    border: 1px solid rgba(110,168,254,0.18);
+    border-radius: 100px;
+    padding: 5px 14px 5px 10px;
+    font-size: 0.78rem;
+    color: var(--accent);
+    font-family: 'Syne', sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  /* cloud icon */
+  .condition-badge svg { flex-shrink: 0; }
+
+  /* ── Body ── */
+  .body {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+  }
+
+  /* ── Temp Panel ── */
+  .temp-panel {
+    background: linear-gradient(170deg, #162032 0%, #111827 100%);
+    border-right: 1px solid var(--border);
+    padding: 32px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .temp-panel::after {
+    content: '';
+    position: absolute;
+    bottom: -30px; left: 50%;
+    transform: translateX(-50%);
+    width: 140px; height: 140px;
+    background: radial-gradient(circle, rgba(247,161,75,0.12), transparent 70%);
+    pointer-events: none;
+  }
+
+  .temp-f {
+    font-family: 'Syne', sans-serif;
+    font-size: 3.42rem;
+    font-weight: 800;
+    color: var(--accent2);
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .temp-f span { font-size: 1.8rem; font-weight: 600; opacity: 0.7; }
+
+  .temp-c {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.35rem;
+    font-weight: 600;
+    color: var(--muted);
+    line-height: 1;
+    letter-spacing: -0.01em;
+    margin-top: 4px;
+  }
+
+  .temp-c span { font-size: 0.9rem; font-weight: 400; opacity: 0.7; }
+
+  .divider-h {
+    width: 32px; height: 1px;
+    background: var(--border);
+    margin: 8px 0;
+  }
+
+  .feels {
+    font-size: 1.08rem;
+    color: var(--muted);
+    text-align: center;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .feels strong {
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* ── Stats Grid ── */
+  .stats {
+    padding: 8px 0;
+  }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    padding: 13px 28px;
+    border-bottom: 1px solid var(--divider);
+    transition: background 0.18s;
+    animation: fadeUp 0.5s ease both;
+  }
+
+  .stat-row:last-child { border-bottom: none; }
+  .stat-row:nth-child(1) { animation-delay: 0.05s; }
+  .stat-row:nth-child(2) { animation-delay: 0.10s; }
+  .stat-row:nth-child(3) { animation-delay: 0.15s; }
+  .stat-row:nth-child(4) { animation-delay: 0.20s; }
+  .stat-row:nth-child(5) { animation-delay: 0.25s; }
+  .stat-row:nth-child(6) { animation-delay: 0.30s; }
+  .stat-row:nth-child(7) { animation-delay: 0.35s; }
+
+  .stat-row:hover { background: rgba(110,168,254,0.04); }
+
+  .stat-left { display: flex; align-items: center; gap: 12px; }
+
+  .stat-icon {
+    width: 28px; height: 28px;
+    border-radius: 7px;
+    background: rgba(110,168,254,0.08);
+    border: 1px solid rgba(110,168,254,0.14);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .stat-label {
+    font-size: 0.78rem;
+    color: var(--muted);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    font-weight: 400;
+  }
+
+  .stat-value {
+    font-family: 'Syne', sans-serif;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: 0.01em;
+  }
+
+  .stat-value .unit {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--muted);
+    font-weight: 400;
+    margin-left: 3px;
+  }
+
+  /* bar for humidity/cloud */
+  .bar-wrap {
+    display: flex; align-items: center; gap: 10px;
+  }
+
+  .bar {
+    width: 60px; height: 3px;
+    background: rgba(110,168,254,0.12);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 10px;
+    background: linear-gradient(90deg, var(--accent), #a5c8ff);
+    transition: width 1s ease;
+  }
+
+  .bar-fill.orange {
+    background: linear-gradient(90deg, var(--accent2), #ffd480);
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="location-block">
+      <div class="location">Denver, CO</div>
+      <div class="timestamp">Thu Mar 12 &nbsp;·&nbsp; 8:00 PM MDT</div>
+    </div>
+    <div class="condition-badge">
+      <!-- cloud icon -->
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+      </svg>
+      Overcast
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div class="body">
+
+    <!-- Temp Panel -->
+    <div class="temp-panel">
+      <div class="temp-f">56<span>°F</span></div>
+      <div class="temp-c">13<span>°C</span></div>
+      <div class="divider-h"></div>
+      <div class="feels">Feels like <strong>48°F</strong></div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats">
+
+      <div class="stat-row">
+        <div class="stat-left">
+          <div class="stat-icon">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a5 5 0 0 1 5 5c0 7-5 13-5 13S7 14 7 7a5 5 0 0 1 5-5z"/><circle cx="12" cy="7" r="2"/></svg>
+          </div>
+          <div class="stat-label">Humidity</div>
+        </div>
+        <div class="stat-value">
+          <div class="bar-wrap">
+            <div class="bar"><div class="bar-fill" style="width:18%"></div></div>
+            18<span class="unit">%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat-left">
+          <div class="stat-icon">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+          </div>
+          <div class="stat-label">Cloud Cover</div>
+        </div>
+        <div class="stat-value">
+          <div class="bar-wrap">
+            <div class="bar"><div class="bar-fill orange" style="width:100%"></div></div>
+            100<span class="unit">%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat-left">
+          <div class="stat-icon">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/></svg>
+          </div>
+          <div class="stat-label">Wind</div>
+        </div>
+        <div class="stat-value">5 mph <span class="unit">WNW &nbsp;· 8 km/h</span></div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat-left">
+          <div class="stat-icon">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+          </div>
+          <div class="stat-label">Gusts</div>
+        </div>
+        <div class="stat-value">12 mph <span class="unit">· 20 km/h</span></div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat-left">
+          <div class="stat-icon">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16.2A4.5 4.5 0 0 0 17.5 8h-1.8A7 7 0 1 0 4 14.9"/><polyline points="16 16 12 20 8 16"/></svg>
+          </div>
+          <div class="stat-label">Precipitation</div>
+        </div>
+        <div class="stat-value">0.00 <span class="unit">in · 0.0 mm</span></div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat-left">
+          <div class="stat-icon">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+          </div>
+          <div class="stat-label">Pressure</div>
+        </div>
+        <div class="stat-value">836 <span class="unit">hPa</span></div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat-left">
+          <div class="stat-icon">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#6ea8fe" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
+          <div class="stat-label">Visibility</div>
+        </div>
+        <div class="stat-value">169.6 mi <span class="unit">· 273.0 km</span></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
