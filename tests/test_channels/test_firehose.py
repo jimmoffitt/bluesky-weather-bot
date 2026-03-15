@@ -22,17 +22,14 @@ def channel(mock_settings):
 # ---------------------------------------------------------------------------
 
 class TestIsTrigger:
-    def test_lowercase_hashtag(self, channel):
-        assert channel._is_trigger("#zipwx 80501")
-
-    def test_mixed_case_hashtag(self, channel):
-        assert channel._is_trigger("#ZipWx Denver, CO")
-
-    def test_uppercase_hashtag(self, channel):
-        assert channel._is_trigger("#ZIPWX Portland")
-
     def test_mention_trigger(self, channel):
         assert channel._is_trigger("@testbot.bsky.social 80501")
+
+    def test_mention_trigger_mixed_case(self, channel):
+        assert channel._is_trigger("@TestBot.bsky.social Denver, CO")
+
+    def test_mention_trigger_mid_text(self, channel):
+        assert channel._is_trigger("hey @testbot.bsky.social Portland")
 
     def test_no_trigger(self, channel):
         assert not channel._is_trigger("Just talking about weather")
@@ -40,34 +37,37 @@ class TestIsTrigger:
     def test_zip_alone_is_not_trigger(self, channel):
         assert not channel._is_trigger("80501 forecast today")
 
+    def test_hashtag_alone_is_not_trigger(self, channel):
+        assert not channel._is_trigger("#ZipWx Denver, CO")
+
 
 # ---------------------------------------------------------------------------
 # Location extraction
 # ---------------------------------------------------------------------------
 
 class TestExtractLocation:
-    def test_zip_after_hashtag(self, channel):
-        assert channel._extract_location("#ZipWx 80501") == "80501"
+    def test_zip_after_mention(self, channel):
+        assert channel._extract_location("@testbot.bsky.social 80501") == "80501"
 
-    def test_city_st_after_hashtag(self, channel):
-        assert channel._extract_location("#ZipWx Denver, CO") == "Denver, CO"
+    def test_city_st_after_mention(self, channel):
+        assert channel._extract_location("@testbot.bsky.social Denver, CO") == "Denver, CO"
 
-    def test_bare_city_after_hashtag(self, channel):
-        assert channel._extract_location("#ZipWx Portland") == "Portland"
+    def test_bare_city_after_mention(self, channel):
+        assert channel._extract_location("@testbot.bsky.social Portland") == "Portland"
 
     def test_zip_fallback_anywhere_in_text(self, channel):
-        assert channel._extract_location("check weather 80501 please #ZipWx") == "80501"
+        assert channel._extract_location("check weather 80501 please @testbot.bsky.social") == "80501"
 
     def test_city_st_fallback(self, channel):
-        assert channel._extract_location("Denver, CO needs weather #ZipWx") == "Denver, CO"
+        assert channel._extract_location("Denver, CO needs weather @testbot.bsky.social") == "Denver, CO"
 
-    def test_none_when_trigger_only(self, channel):
-        assert channel._extract_location("#ZipWx") is None
+    def test_none_when_mention_only(self, channel):
+        assert channel._extract_location("@testbot.bsky.social") is None
 
-    def test_text_after_trigger_returned_as_candidate(self, channel):
-        # Any text after the trigger is returned as a location candidate;
+    def test_text_after_mention_returned_as_candidate(self, channel):
+        # Any text after the mention is returned as a location candidate;
         # the resolver will decide whether it's valid.
-        result = channel._extract_location("#ZipWx please tell me the weather")
+        result = channel._extract_location("@testbot.bsky.social please tell me the weather")
         assert result is not None
 
 
@@ -84,7 +84,7 @@ class TestBuildRequest:
 
     def test_builds_request_with_zip(self, channel):
         req = channel._build_request(
-            text="#ZipWx 80501",
+            text="@testbot.bsky.social 80501",
             repo="did:plc:abc123",
             op=self._make_op(),
         )
@@ -95,7 +95,7 @@ class TestBuildRequest:
 
     def test_at_uri_constructed_correctly(self, channel):
         req = channel._build_request(
-            text="#ZipWx 80501",
+            text="@testbot.bsky.social 80501",
             repo="did:plc:abc123",
             op=self._make_op(rkey="post999"),
         )
@@ -103,7 +103,7 @@ class TestBuildRequest:
 
     def test_cid_stored_as_string(self, channel):
         req = channel._build_request(
-            text="#ZipWx 80501",
+            text="@testbot.bsky.social 80501",
             repo="did:plc:abc123",
             op=self._make_op(cid="bafyreid999"),
         )
@@ -112,7 +112,7 @@ class TestBuildRequest:
     def test_returns_request_with_null_location_when_no_location(self, channel):
         """No location → AlertRequest dispatched with raw_location=None (triggers help reply)."""
         req = channel._build_request(
-            text="#ZipWx",
+            text="@testbot.bsky.social",
             repo="did:plc:abc123",
             op=self._make_op(),
         )

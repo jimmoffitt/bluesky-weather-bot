@@ -34,6 +34,7 @@ import logging
 import signal
 import threading
 import time
+from datetime import datetime
 from typing import Optional
 
 from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest
@@ -162,8 +163,9 @@ class ZipWx:
         so a bad request never crashes the channel.
         """
         logger.info(
-            "[bot] Request from=%s channel=%s location=%r",
-            request.requester_handle, request.source_channel, request.raw_location,
+            "[bot] Request from=%s channel=%s location=%r command=%r",
+            request.requester_handle, request.source_channel,
+            request.raw_location, request.command,
         )
 
         # Persist the request
@@ -173,19 +175,43 @@ class ZipWx:
             requester_handle=request.requester_handle,
             raw_location=request.raw_location,
             status="pending",
+            ingested_at=request.received_at.isoformat(),
         )
         request.db_id = db_id
+
+        # DM preference commands are handled separately
+        if request.command:
+            self._handle_dm_command(request)
+            self._db.update_request_status(db_id, "complete")
+            return
+
+        # Home location fallback for DMs with no explicit location
+        if not request.raw_location and request.source_channel == "dm" and request.requester_did:
+            prefs = self._db.get_user_prefs(request.requester_did)
+            if prefs and prefs.get("home_raw"):
+                request.raw_location = prefs["home_raw"]
+                logger.info("[bot] Using home location %r for %s",
+                            request.raw_location, request.requester_handle)
 
         # No location: file channel broadcasts raw content; social channels get a help reply
         if not request.raw_location:
             if request.source_channel == "file":
                 self._broadcast_raw(request)
+            elif request.source_channel == "dm":
+                self._send_dm_reply(request, (
+                    "Send me a zip code or city name for weather.\n"
+                    "Examples: 80501  or  Denver, CO\n\n"
+                    "You can also set a home location:\n"
+                    "  set home Denver, CO\n\n"
+                    "Send 'help' for all commands."
+                ))
             else:
                 self._send_help_reply(request)
             self._db.update_request_status(db_id, "complete")
             return
 
         # Weather lookup
+        self._db.update_request_processing_start(db_id)
         try:
             reports = self._weather.lookup(request.raw_location)
         except ValueError as exc:
@@ -199,7 +225,16 @@ class ZipWx:
             self._db.update_request_status(db_id, "error")
             return
 
+        # Look up user units preference (applies to all channels)
+        units = "imperial"
+        if request.requester_did:
+            prefs = self._db.get_user_prefs(request.requester_did)
+            if prefs:
+                units = prefs.get("units", "imperial")
+
         # Format and send one thread per resolved location
+        self._db.update_request_formatting_start(db_id)
+        delivery_finished_at = None
         for report in reports:
             target_channel = self._route(request)
             use_images = (
@@ -208,7 +243,7 @@ class ZipWx:
                 and target_channel == "bluesky_post"   # DMs always use text
             )
             if use_images:
-                images, alts, caption = self._image_formatter.format_images(report)
+                images, alts, caption = self._image_formatter.format_images(report, units=units)
                 thread_posts = [caption]
                 # Send only the first image (portrait conditions card) so it
                 # fills the phone screen rather than appearing side-by-side.
@@ -223,7 +258,7 @@ class ZipWx:
                     post_image_alts=alts[:1],
                 )
             else:
-                thread_posts = self._formatter.format_thread(report)
+                thread_posts = self._formatter.format_thread(report, units=units)
                 payload = NotificationPayload(
                     request_db_id=db_id,
                     post_thread=thread_posts,
@@ -232,7 +267,9 @@ class ZipWx:
                     recipient_handle=request.requester_handle,
                     target_channel=target_channel,
                 )
+            delivery_started_at = _now()
             result = self._deliver(payload)
+            delivery_finished_at = _now()
 
             # Log response
             for i, text in enumerate(thread_posts):
@@ -242,17 +279,103 @@ class ZipWx:
                     message_text=text,
                     post_index=i,
                     post_uri=result.post_uri if i == 0 else None,
+                    delivery_started_at=delivery_started_at,
+                    delivery_finished_at=delivery_finished_at,
                 )
 
+        self._db.update_request_processing_finish(db_id)
+        if delivery_finished_at:
+            self._db.update_request_mark_slow(
+                db_id,
+                delivery_finished_at=delivery_finished_at,
+                source_created_at=None,  # source_created_at not yet captured from AT Protocol
+            )
         self._db.update_request_status(db_id, "complete")
+
+    def _handle_dm_command(self, request: AlertRequest) -> None:
+        """Handles DM preference commands (set home, set units, settings, reset, help)."""
+        cmd = request.command
+        did = request.requester_did
+
+        if cmd == "set_home":
+            raw = request.raw_content.strip()
+            for prefix in ("set home ", "set home"):
+                if raw.lower().startswith(prefix):
+                    raw = raw[len(prefix):].strip()
+                    break
+            if not raw:
+                self._send_dm_reply(request, "Please provide a location: set home Denver, CO")
+                return
+            try:
+                reports = self._weather.lookup(raw)
+                display = reports[0].location.display_name if reports else raw
+                self._db.set_user_prefs(did, handle=request.requester_handle,
+                                        home_raw=raw, home_display=display)
+                self._send_dm_reply(request, f"Home set to {display}. DM me anytime for weather there!")
+            except Exception:
+                self._send_dm_reply(request,
+                    f"Couldn't find location: {raw!r}. Try a zip code or 'City, ST'.")
+
+        elif cmd == "set_units_imperial":
+            self._db.set_user_prefs(did, handle=request.requester_handle, units="imperial")
+            self._send_dm_reply(request,
+                "Units set to imperial (°F primary). Both °F and °C will still be shown.")
+
+        elif cmd == "set_units_metric":
+            self._db.set_user_prefs(did, handle=request.requester_handle, units="metric")
+            self._send_dm_reply(request,
+                "Units set to metric (°C primary). Both °C and °F will still be shown.")
+
+        elif cmd == "clear_home":
+            if did:
+                self._db.clear_home(did)
+            self._send_dm_reply(request, "Home location cleared.")
+
+        elif cmd == "reset_prefs":
+            if did:
+                self._db.reset_prefs(did)
+            self._send_dm_reply(request, "Preferences reset to defaults (imperial, no home).")
+
+        elif cmd == "settings":
+            prefs = self._db.get_user_prefs(did) if did else None
+            if prefs:
+                home  = prefs.get("home_display") or prefs.get("home_raw") or "not set"
+                units = prefs.get("units", "imperial")
+            else:
+                home, units = "not set", "imperial"
+            self._send_dm_reply(request, f"Your settings:\n  Units: {units}\n  Home: {home}")
+
+        elif cmd == "help":
+            self._send_dm_reply(request, (
+                "ZipWx commands:\n"
+                "  80501 or Denver, CO — get weather\n"
+                "  set home Denver, CO — save home location\n"
+                "  imperial / metric — set display units\n"
+                "  settings — view your preferences\n"
+                "  reset — clear all preferences\n"
+                "  clear home — remove home location"
+            ))
+
+        else:
+            logger.warning("[bot] Unknown DM command: %r", cmd)
+
+    def _send_dm_reply(self, request: AlertRequest, message: str) -> None:
+        payload = NotificationPayload(
+            request_db_id=request.db_id,
+            post_thread=[message],
+            reply_to_uri=request.reply_to_uri,
+            recipient_handle=request.requester_handle,
+            target_channel="bluesky_dm",
+        )
+        self._deliver(payload)
 
     def _send_help_reply(self, request: AlertRequest) -> None:
         help_text = (
-            "Hi! Send me a US zip code or city to get weather.\n"
+            "Hi! Mention me with a US zip code or city to get weather.\n"
             "Examples:\n"
-            "  #ZipWx 80501\n"
-            "  #ZipWx Denver, CO\n"
-            "  #ZipWx Minneapolis"
+            "  @zipwx.bsky.social 80501\n"
+            "  @zipwx.bsky.social Denver, CO\n"
+            "  @zipwx.bsky.social Minneapolis"
         )
         payload = NotificationPayload(
             request_db_id=request.db_id,
@@ -329,6 +452,14 @@ class ZipWx:
 
         stop_event.wait()
         self.stop()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _now() -> str:
+    return datetime.utcnow().isoformat()
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,8 @@
 bluesky_weather_bot entry point.
 
 Run from the project root:
-    python main.py
+    .venv/bin/python3 main.py          # recommended — explicit venv
+    source .venv/bin/activate && python3 main.py
 
 Or install and run as a module:
     python -m bluesky_weather_bot
@@ -15,6 +16,19 @@ from pathlib import Path
 
 # Ensure project root is on the path when run directly
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Guard against being run with the wrong Python / venv.
+# pgeocode is a required dependency; a missing import means the wrong
+# interpreter was used and zip-code lookups will silently fail.
+try:
+    import pgeocode  # noqa: F401
+except ImportError:
+    print(
+        "ERROR: pgeocode not found — wrong Python interpreter?\n"
+        "Run with:  .venv/bin/python3 main.py",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 from bluesky_weather_bot.config.settings import Settings, ConfigError
 from bot import build_bot

@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 _ZIP_RE     = re.compile(r"\b(\d{5})\b")
 _CITY_ST_RE = re.compile(r"\b([A-Z][a-zA-Z\s]{2,20}),\s*([A-Z]{2})\b")
-_ZIPWX_RE   = re.compile(r"#zipwx", re.IGNORECASE)
 
 DEFAULT_POLL_INTERVAL = 15.0
 
@@ -145,25 +144,28 @@ class DMAlertChannel(AlertChannel):
                     continue
 
                 text = getattr(msg, "text", "") or ""
-                raw_location = self._extract_location(text)
+                command = self._extract_command(text)
+                raw_location = None if command else self._extract_location(text)
 
                 # Mark seen before dispatch so a crash mid-pipeline doesn't reprocess
                 self._mark_seen(msg_id, log.convo_id)
 
-                if raw_location is None:
+                if not command and raw_location is None:
                     logger.debug("[dm] No location in message %s: %r", msg_id, text[:60])
 
-                sender_did = getattr(getattr(msg, "sender", None), "did", "") or ""
+                sender_did    = getattr(getattr(msg, "sender", None), "did", "") or ""
                 sender_handle = self._did_to_handle(sender_did) or sender_did
 
                 request = AlertRequest(
                     source_channel="dm",
                     requester_handle=sender_handle,
+                    requester_did=sender_did or None,
                     raw_location=raw_location,
                     raw_content=text,
                     # reply_to_uri carries convo_id so BlueskyDMNotifyChannel
                     # knows which conversation to reply to
                     reply_to_uri=log.convo_id,
+                    command=command,
                 )
                 self._dispatch(request)
 
@@ -207,6 +209,35 @@ class DMAlertChannel(AlertChannel):
             return None
 
     @staticmethod
+    def _extract_command(text: str) -> Optional[str]:
+        """
+        Detects preference commands in DM text.
+
+        Returns a command string or None if the message is a location request.
+        Commands take priority over location extraction.
+        """
+        normalised = text.strip().lower()
+        if normalised.startswith("set home"):
+            return "set_home"
+        if normalised in ("imperial", "set imperial", "use imperial", "fahrenheit"):
+            return "set_units_imperial"
+        if normalised in ("metric", "set metric", "use metric", "celsius"):
+            return "set_units_metric"
+        if normalised in ("set units imperial", "units imperial"):
+            return "set_units_imperial"
+        if normalised in ("set units metric", "units metric"):
+            return "set_units_metric"
+        if normalised in ("clear home", "clearhome", "remove home", "reset home"):
+            return "clear_home"
+        if normalised in ("reset", "reset prefs", "reset preferences"):
+            return "reset_prefs"
+        if normalised in ("settings", "prefs", "preferences", "my settings"):
+            return "settings"
+        if normalised in ("help", "?", "commands"):
+            return "help"
+        return None
+
+    @staticmethod
     def _extract_location(text: str) -> Optional[str]:
         """
         Extracts a location from DM text.
@@ -214,7 +245,7 @@ class DMAlertChannel(AlertChannel):
         Priority:
           1. 5-digit zip code
           2. City, ST pattern
-          3. Remaining text after stripping #ZipWx trigger (if 3–50 chars)
+          3. Raw text as-is (if 3–50 chars)
         """
         zip_m = _ZIP_RE.search(text)
         if zip_m:
@@ -224,7 +255,7 @@ class DMAlertChannel(AlertChannel):
         if city_m:
             return f"{city_m.group(1).strip()}, {city_m.group(2)}"
 
-        clean = _ZIPWX_RE.sub("", text).strip()
+        clean = text.strip()
         if 3 <= len(clean) <= 50:
             return clean
 

@@ -59,16 +59,73 @@ Users trigger the bot by:
 
 | Method | Example |
 |--------|---------|
-| Public post — zip code | `#ZipWx 80501` |
-| Public post — city | `#ZipWx Denver, CO` |
-| Public post — city only | `#ZipWx Portland` *(returns results for all matches)* |
-| Mention | `@zipwx.bsky.social 94102` |
-| Direct message | Send any of the above to the bot |
+| Public post — mention + zip | `@zipwx.bsky.social 80501` |
+| Public post — mention + city | `@zipwx.bsky.social Denver, CO` |
+| Public post — mention + city only | `@zipwx.bsky.social Portland` *(returns results for all matches)* |
+| Direct message — zip or city | `80501` or `Denver, CO` or `Portland` |
+| Direct message — home location | *(no text needed — uses your saved home location)* |
 | File inbox | Drop a YAML file into `inbox/` |
 
 The bot replies to the original post (public) or sends a DM response. Image
 mode is used for public replies; DMs always use the text thread format since
 Bluesky DMs do not support image attachments.
+
+## Personalizing via DM
+
+Users can configure their experience by sending commands directly to the bot via
+Bluesky DM. Changes are stored per-user and apply to all future responses on
+any channel.
+
+### Weather requests
+
+Just send a location — no trigger word needed:
+
+```
+80501
+Denver, CO
+Portland
+```
+
+If you have a home location saved, send any DM with no location and the bot
+replies with your home weather automatically.
+
+### Setting a home location
+
+```
+set home Denver, CO
+set home 80501
+set home Portland
+```
+
+The bot validates the location before saving. Once set, a blank DM (or any
+unrecognized message) will return weather for your home location.
+
+To remove it:
+
+```
+clear home
+```
+
+### Display units
+
+Both °F and °C (and mph/km/h, in/mm) are always shown. The units setting
+controls which value appears first and is styled as the primary reading.
+
+| Command | Effect |
+|---------|--------|
+| `imperial` | °F · mph · inches displayed first (default) |
+| `metric` | °C · km/h · mm displayed first |
+
+Aliases also accepted: `set units imperial`, `use imperial`, `fahrenheit`,
+`set units metric`, `use metric`, `celsius`.
+
+### Viewing and resetting preferences
+
+| Command | Effect |
+|---------|--------|
+| `settings` | Show your current units and home location |
+| `reset` | Clear all preferences and return to defaults |
+| `help` | List all available commands |
 
 ## Configuration
 
@@ -168,6 +225,66 @@ bluesky_weather_bot/
 └── logs/                            # log files (gitignored)
 ```
 
+## Running as a system service
+
+On Linux (Raspberry Pi, Ubuntu, Debian), you can run the bot as a `systemd`
+service so it starts automatically on boot and restarts on failure.
+
+**1. Create the unit file:**
+
+```bash
+sudo nano /etc/systemd/system/weather-bot.service
+```
+
+```ini
+[Unit]
+Description=Bluesky Weather Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/path/to/bluesky-weather-bot
+EnvironmentFile=/path/to/bluesky-weather-bot/.local.env
+ExecStart=/path/to/bluesky-weather-bot/.venv/bin/python3 main.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Replace `YOUR_USER` and `/path/to/bluesky-weather-bot` with your actual
+username and project directory.
+
+**2. Enable and start:**
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable weather-bot
+sudo systemctl start weather-bot
+```
+
+**3. Check status and logs:**
+
+```bash
+sudo systemctl status weather-bot
+journalctl -u weather-bot -f       # follow live logs
+journalctl -u weather-bot -n 100   # last 100 lines
+```
+
+**4. Stop or restart:**
+
+```bash
+sudo systemctl stop weather-bot
+sudo systemctl restart weather-bot
+```
+
+> **Important:** `ExecStart` must point to the venv's `python3` directly
+> (not `python` or the system Python) so all dependencies are available.
+> See the note in [Quick start](#quick-start) about using the correct interpreter.
+
 ## Inbox YAML format
 
 ```yaml
@@ -189,4 +306,5 @@ Powered by [Open-Meteo](https://open-meteo.com/) — free, no API key required.
 - **Forecast**: next 6 hours (temp, precip probability, wind, cloud cover)
 - **Historical**: same date last year + 10-year climatological average
 
-All values shown in dual units: °F (°C), mph (km/h), inches (mm).
+All values shown in dual units (°F/°C, mph/km/h, in/mm). Display order is
+user-configurable via DM — see [Personalizing via DM](#personalizing-via-dm).

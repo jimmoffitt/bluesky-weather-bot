@@ -60,8 +60,8 @@ class TestExtractLocation:
     def test_city_st(self, poller):
         assert poller._extract_location("Denver, CO please") == "Denver, CO"
 
-    def test_bare_text_after_wxbot_trigger(self, poller):
-        assert poller._extract_location("#ZipWx Portland") == "Portland"
+    def test_bare_city_name(self, poller):
+        assert poller._extract_location("Portland") == "Portland"
 
     def test_bare_text_without_trigger(self, poller):
         assert poller._extract_location("Longmont") == "Longmont"

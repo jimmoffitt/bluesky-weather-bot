@@ -82,12 +82,19 @@ def _tz_abbr(timezone: str, ts: datetime) -> str:
 class WeatherFormatter:
     """Stateless formatter. Call format_thread() with a WeatherReport."""
 
-    def format_thread(self, report: WeatherReport) -> list[str]:
+    def format_thread(self, report: WeatherReport, units: str = "imperial") -> list[str]:
+        """
+        Format a WeatherReport into a list of Bluesky post strings.
+
+        units: "imperial" (°F primary, °C secondary) or
+               "metric"   (°C primary, °F secondary).
+        Both values are always shown; units controls display order.
+        """
         posts = [
-            self._post1_current(report),
-            self._post2_forecast(report),
+            self._post1_current(report, units),
+            self._post2_forecast(report, units),
         ]
-        post3 = self._post3_historical(report)
+        post3 = self._post3_historical(report, units)
         if post3:
             posts.append(post3)
         return posts
@@ -96,7 +103,7 @@ class WeatherFormatter:
     # Post 1 — Current conditions
     # ------------------------------------------------------------------
 
-    def _post1_current(self, report: WeatherReport) -> str:
+    def _post1_current(self, report: WeatherReport, units: str = "imperial") -> str:
         c   = report.current
         loc = report.location.display_name
 
@@ -113,15 +120,26 @@ class WeatherFormatter:
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
         emoji    = _weather_emoji(c.weather_description)
 
+        if units == "metric":
+            temp_str  = f"🌡 {c.temperature_c:.0f}°C ({c.temperature_f:.0f}°F)"
+            feels_str = f"Feels {c.feels_like_c:.0f}°C ({c.feels_like_f:.0f}°F)"
+            wind_str  = (f"💨 Wind: {c.wind_speed_kph:.0f}km/h ({c.wind_speed_mph:.0f}mph)"
+                         f" {cardinal} | Gusts {c.wind_gusts_kph:.0f}km/h ({c.wind_gusts_mph:.0f}mph)")
+            precip_str = f"🌧 Precip: {c.precipitation_mm:.1f}mm ({c.precipitation_in:.2f}in)"
+        else:
+            temp_str  = f"🌡 {c.temperature_f:.0f}°F ({c.temperature_c:.0f}°C)"
+            feels_str = f"Feels {c.feels_like_f:.0f}°F ({c.feels_like_c:.0f}°C)"
+            wind_str  = (f"💨 Wind: {c.wind_speed_mph:.0f}mph ({c.wind_speed_kph:.0f}km/h)"
+                         f" {cardinal} | Gusts {c.wind_gusts_mph:.0f}mph ({c.wind_gusts_kph:.0f}km/h)")
+            precip_str = f"🌧 Precip: {c.precipitation_in:.2f}in ({c.precipitation_mm:.1f}mm)"
+
         lines = [
             f"📍 {loc} | {ts_str}",
             f"{emoji} {c.weather_description}",
-            f"🌡 {c.temperature_f:.0f}°F ({c.temperature_c:.0f}°C)"
-            f" | Feels {c.feels_like_f:.0f}°F ({c.feels_like_c:.0f}°C)",
+            f"{temp_str} | {feels_str}",
             f"💧 Humidity: {c.humidity_pct:.0f}%",
-            f"💨 Wind: {c.wind_speed_mph:.0f}mph ({c.wind_speed_kph:.0f}km/h)"
-            f" {cardinal} | Gusts {c.wind_gusts_mph:.0f}mph ({c.wind_gusts_kph:.0f}km/h)",
-            f"🌧 Precip: {c.precipitation_in:.2f}in ({c.precipitation_mm:.1f}mm)",
+            wind_str,
+            precip_str,
             f"👁 Visibility: {c.visibility_miles:.1f}mi ({c.visibility_km:.1f}km)",
             f"📊 Pressure: {c.surface_pressure_hpa:.0f}hPa",
         ]
@@ -131,17 +149,23 @@ class WeatherFormatter:
     # Post 2 — 6-hour forecast
     # ------------------------------------------------------------------
 
-    def _post2_forecast(self, report: WeatherReport) -> str:
+    def _post2_forecast(self, report: WeatherReport, units: str = "imperial") -> str:
         loc   = report.location.display_name
         slots = report.forecast.next_n_hours(6)
         lines = [f"⏱ Next 6 Hours — {loc}"]
 
         for slot in slots:
+            if units == "metric":
+                temp_part = f"{slot.temperature_c:.0f}°C"
+                wind_part = f"{slot.wind_speed_kph:.0f}km/h"
+            else:
+                temp_part = f"{slot.temperature_f:.0f}°F"
+                wind_part = f"{slot.wind_speed_mph:.0f}mph"
             line = (
-                f"{_hour_label(slot.hour)}: {slot.temperature_f:.0f}°F,"
+                f"{_hour_label(slot.hour)}: {temp_part},"
                 f" ☁ {slot.cloud_cover_pct:.0f}%,"
                 f" 💧 {slot.precipitation_probability_pct:.0f}%,"
-                f" 💨 {slot.wind_speed_mph:.0f}mph"
+                f" 💨 {wind_part}"
             )
             if len("\n".join(lines + [line])) > MAX_POST_LEN:
                 break
@@ -153,7 +177,7 @@ class WeatherFormatter:
     # Post 3 — Historical comparison
     # ------------------------------------------------------------------
 
-    def _post3_historical(self, report: WeatherReport) -> Optional[str]:
+    def _post3_historical(self, report: WeatherReport, units: str = "imperial") -> Optional[str]:
         h = report.historical
         if h.year_ago is None and h.ten_year_avg is None:
             return None
@@ -161,24 +185,29 @@ class WeatherFormatter:
         loc   = report.location.display_name
         lines = [f"📅 Historical — {loc}"]
 
-        if h.year_ago:
-            r = h.year_ago
-            date_str = f"{r.date.strftime('%b')} {r.date.day}, {r.date.year}"
-            lines.append(f"Last year ({date_str}):")
-            lines.append(
+        def _hist_line(r: DailyHistoricalRecord) -> str:
+            if units == "metric":
+                return (
+                    f"  Hi {r.temp_max_c:.0f}°C ({r.temp_max_f:.0f}°F)"
+                    f" / Lo {r.temp_min_c:.0f}°C ({r.temp_min_f:.0f}°F)"
+                    f" | Precip {r.precipitation_mm:.1f}mm"
+                )
+            return (
                 f"  Hi {r.temp_max_f:.0f}°F ({r.temp_max_c:.0f}°C)"
                 f" / Lo {r.temp_min_f:.0f}°F ({r.temp_min_c:.0f}°C)"
                 f" | Precip {r.precipitation_in:.2f}in"
             )
 
+        if h.year_ago:
+            r = h.year_ago
+            date_str = f"{r.date.strftime('%b')} {r.date.day}, {r.date.year}"
+            lines.append(f"Last year ({date_str}):")
+            lines.append(_hist_line(r))
+
         if h.ten_year_avg:
             r = h.ten_year_avg
             lines.append(f"10-yr avg ({r.date.strftime('%b')} \u00b17d):")
-            lines.append(
-                f"  Hi {r.temp_max_f:.0f}°F ({r.temp_max_c:.0f}°C)"
-                f" / Lo {r.temp_min_f:.0f}°F ({r.temp_min_c:.0f}°C)"
-                f" | Precip {r.precipitation_in:.2f}in"
-            )
+            lines.append(_hist_line(r))
 
         post = "\n".join(lines)
         if len(post) <= MAX_POST_LEN:

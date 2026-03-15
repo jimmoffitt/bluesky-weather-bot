@@ -278,12 +278,12 @@ class WeatherImageFormatter:
     """
 
     def format_images(
-        self, report: WeatherReport
+        self, report: WeatherReport, units: str = "imperial"
     ) -> tuple[list[bytes], list[str], str]:
         images: list[bytes] = []
         alts:   list[str]   = []
 
-        card1 = self._render_current_card(report)
+        card1 = self._render_current_card(report, units)
         images.append(card1)
         alts.append(self._alt_current(report))
 
@@ -303,12 +303,12 @@ class WeatherImageFormatter:
     # Card 1 — Current conditions  (800 × 500 px)
     # ------------------------------------------------------------------
 
-    def _render_current_card(self, report: WeatherReport) -> bytes:
+    def _render_current_card(self, report: WeatherReport, units: str = "imperial") -> bytes:
         # Portrait layout — optimised for phone viewing
-        W      = 720
-        H      = 1000
-        H_HDR  = 100   # header strip
-        TEMP_H = 240   # temperature block below header
+        W      = 900
+        H      = 900
+        H_HDR  = 76    # header strip — single row: location · timestamp · badge
+        TEMP_H = 170   # snug: just enough for temp row + FEELS LIKE
 
         img, draw = _new_card(W, H)
 
@@ -325,18 +325,18 @@ class WeatherImageFormatter:
         ts_str   = f"{dow} {mon} {day}  \u00b7  {hour12}:{minute} {ampm} {tz}"
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
 
-        # ── Header ────────────────────────────────────────────────────────────
+        # ── Header — badge calculated first so timestamp can anchor to it ─────
         draw.rectangle([(0, 0), (W, H_HDR)], fill=_hex_to_rgb(HDR_BG))
         draw.line([(0, H_HDR), (W, H_HDR)], fill=_hex_to_rgb(BORDER), width=1)
-        draw.text((20, 10), loc,    font=_font_syne(24), fill=TEXT_PRI)
-        draw.text((20, 52), ts_str, font=_font_mono(26), fill=TEXT_MUT)
 
-        # Condition badge — pill, right-aligned
-        f_badge    = _font_syne(16)
+        f_loc   = _font_syne(28)
+        f_ts    = _font_mono(24)
+        f_badge = _font_syne(19)
+
         badge_text = c.weather_description[:24]
         bbbox      = draw.textbbox((0, 0), badge_text, font=f_badge)
         bw, bh     = bbbox[2] - bbbox[0], bbbox[3] - bbbox[1]
-        bpx, bpy   = 14, 6
+        bpx, bpy   = 12, 5
         bx2        = W - 16
         bx1        = bx2 - bw - 2 * bpx
         by1        = (H_HDR - bh - 2 * bpy) // 2
@@ -346,149 +346,168 @@ class WeatherImageFormatter:
         draw.text((bx1 + bpx, by1 + bpy), badge_text,
                   font=f_badge, fill=_hex_to_rgb(BLUE))
 
-        # ── Temperature block (full-width, darker bg) ─────────────────────────
+        # Location left; timestamp right-anchored to badge — they can never overlap
+        loc_b  = draw.textbbox((0, 0), loc,    font=f_loc)
+        ts_b   = draw.textbbox((0, 0), ts_str, font=f_ts)
+        loc_h  = loc_b[3] - loc_b[1]
+        ts_h   = ts_b[3]  - ts_b[1]
+        row_h  = max(loc_h, ts_h)
+        text_y = (H_HDR - row_h) // 2
+
+        draw.text((20, text_y), loc, font=f_loc, fill=TEXT_PRI)
+        ts_x = bx1 - (ts_b[2] - ts_b[0]) - 16
+        if ts_x > 20 + (loc_b[2] - loc_b[0]) + 8:   # draw only if it fits
+            draw.text((ts_x, text_y + (row_h - ts_h) // 2), ts_str,
+                      font=f_ts, fill=TEXT_MUT)
+
+        # ── Temperature block — °F and °C on the same row ─────────────────────
         draw.rectangle([(0, H_HDR), (W, H_HDR + TEMP_H)], fill=_hex_to_rgb(PANEL_L))
         draw.line([(0, H_HDR + TEMP_H), (W, H_HDR + TEMP_H)],
                   fill=_hex_to_rgb(BORDER), width=1)
 
-        f_num    = _font_syne(80)
-        f_unit   = _font_syne(36)
-        f_tc_num = _font_syne(56)
-        f_tc_u   = _font_syne(36)
+        f_num    = _font_syne(104)
+        f_unit   = _font_syne(47)
+        f_tc_num = _font_syne(73)
+        f_tc_u   = _font_syne(47)
 
-        num_str  = f"{c.temperature_f:.0f}"
-        unit_str = "\u00b0F"
-        tc_str   = f"{c.temperature_c:.0f}"
+        metric = (units == "metric")
+        pri_num  = f"{c.temperature_c:.0f}" if metric else f"{c.temperature_f:.0f}"
+        pri_unit = "\u00b0C"                if metric else "\u00b0F"
+        sec_num  = f"{c.temperature_f:.0f}" if metric else f"{c.temperature_c:.0f}"
+        sec_unit = "\u00b0F"                if metric else "\u00b0C"
+        feels_val = f"{c.feels_like_c:.0f}" if metric else f"{c.feels_like_f:.0f}"
+        feels_u   = "\u00b0C"               if metric else "\u00b0F"
 
-        nb    = draw.textbbox((0, 0), num_str,  font=f_num)
-        cb    = draw.textbbox((0, 0), tc_str,   font=f_tc_num)
-        nw    = nb[2] - nb[0]
-        n_bot = nb[3]
-        uw    = draw.textbbox((0, 0), unit_str, font=f_unit)[2]
-        c_bot = cb[3]
+        nb  = draw.textbbox((0, 0), pri_num,  font=f_num)
+        ub  = draw.textbbox((0, 0), pri_unit, font=f_unit)
+        cb  = draw.textbbox((0, 0), sec_num,  font=f_tc_num)
+        tub = draw.textbbox((0, 0), sec_unit, font=f_tc_u)
 
-        BLOCK_H = n_bot + 8 + c_bot + 20 + 16
-        ty      = H_HDR + max(12, (TEMP_H - BLOCK_H) // 2)
+        nw    = nb[2] - nb[0];  n_bot = nb[3]
+        uw    = ub[2] - ub[0]
+        cw    = cb[2] - cb[0]
 
-        # "54°F" centred horizontally
-        total_w = nw + 4 + uw
+        # Vertical: centre the temperature row + FEELS LIKE block within TEMP_H
+        feels_h   = 18 + 8          # font size + margin
+        content_h = n_bot + 10 + feels_h
+        ty        = H_HDR + max(8, (TEMP_H - content_h) // 2)
+
+        GAP_TC  = 32
+        total_w = nw + 4 + uw + GAP_TC + cw + (tub[2] - tub[0])
         tx      = (W - total_w) // 2
-        unit_y  = ty + nb[1] - draw.textbbox((0, 0), unit_str, font=f_unit)[1]
-        draw.text((tx,          ty),     num_str,  font=f_num,  fill=AMBER)
-        draw.text((tx + nw + 4, unit_y), unit_str, font=f_unit, fill=AMBER)
 
-        # "12°C" centred
-        tc_y    = ty + n_bot + 8
-        tu_bbox = draw.textbbox((0, 0), "\u00b0C", font=f_tc_u)
-        c_bbox  = draw.textbbox((0, 0), tc_str,    font=f_tc_num)
-        tc_w    = (c_bbox[2] - c_bbox[0]) + (tu_bbox[2] - tu_bbox[0])
-        tc_x    = (W - tc_w) // 2
-        draw.text((tc_x, tc_y), tc_str, font=f_tc_num, fill=TEXT_MUT)
-        draw.text((tc_x + (c_bbox[2] - c_bbox[0]),
-                   tc_y + cb[1] - tu_bbox[1]),
-                  "\u00b0C", font=f_tc_u, fill=TEXT_MUT)
+        # All four elements bottom-aligned to shared baseline
+        baseline = ty + n_bot
+        draw.text((tx, ty), pri_num, font=f_num, fill=AMBER)
+        draw.text((tx + nw + 4,                    baseline - ub[3]),  pri_unit, font=f_unit,   fill=AMBER)
+        draw.text((tx + nw + 4 + uw + GAP_TC,      baseline - cb[3]),  sec_num,  font=f_tc_num, fill=TEXT_MUT)
+        draw.text((tx + nw + 4 + uw + GAP_TC + cw, baseline - tub[3]), sec_unit, font=f_tc_u,  fill=TEXT_MUT)
 
-        # Thin divider + "FEELS LIKE"
-        div_y = tc_y + c_bot + 8
-        draw.line([(W // 2 - 20, div_y), (W // 2 + 20, div_y)],
-                  fill=_hex_to_rgb(BORDER), width=1)
-        _text_centered(draw, div_y + 8,
-                       f"FEELS LIKE  {c.feels_like_f:.0f}\u00b0F",
-                       _font_mono(14), TEXT_MUT, W)
+        # "FEELS LIKE"
+        _text_centered(draw, baseline + 10,
+                       f"FEELS LIKE  {feels_val}{feels_u}",
+                       _font_mono(18), TEXT_MUT, W)
 
-        # ── Stats rows (full-width, 7 rows) ───────────────────────────────────
+        # ── Stats rows — single row per metric ────────────────────────────────
         STATS_Y0 = H_HDR + TEMP_H
-        ROW_H    = (H - STATS_Y0) // 7
+        ROW_H    = (H - STATS_Y0) // 6
 
         f_lbl = _font_mono(32)
-        f_pri = _font_mono(40, medium=True)
-        f_sec = _font_mono(30)
+        f_pri = _font_mono(37, medium=True)
+        f_sec = _font_mono(29)
 
         ICON_X = 30
-        LBL_X  = 72
-        VAL_X  = W - 12
+        LBL_X  = 80
+        VAL_X  = W - 16
+
+        if metric:
+            wind_pri  = f"{c.wind_speed_kph:.0f} km/h {cardinal}"
+            wind_sec  = f"  \u00b7  {c.wind_speed_mph:.0f} mph"
+            gusts_pri = f"{c.wind_gusts_kph:.0f} km/h"
+            gusts_sec = f"  \u00b7  {c.wind_gusts_mph:.0f} mph"
+            prec_pri  = f"{c.precipitation_mm:.1f} mm"
+            prec_sec  = f"  \u00b7  {c.precipitation_in:.2f} in"
+        else:
+            wind_pri  = f"{c.wind_speed_mph:.0f} mph {cardinal}"
+            wind_sec  = f"  \u00b7  {c.wind_speed_kph:.0f} km/h"
+            gusts_pri = f"{c.wind_gusts_mph:.0f} mph"
+            gusts_sec = f"  \u00b7  {c.wind_gusts_kph:.0f} km/h"
+            prec_pri  = f"{c.precipitation_in:.2f} in"
+            prec_sec  = f"  \u00b7  {c.precipitation_mm:.1f} mm"
 
         rows = [
-            ("HUMIDITY",      "blue",  "drop",     c.humidity_pct,
+            ("HUMIDITY",    "blue",  "drop",     c.humidity_pct,
              f"{c.humidity_pct:.0f} %",    None),
-            ("CLOUD COVER",   "amber", "cloud",    c.cloud_cover_pct,
+            ("CLOUD COVER", "amber", "cloud",    c.cloud_cover_pct,
              f"{c.cloud_cover_pct:.0f} %", None),
-            ("WIND",          "muted", "wind",     None,
-             f"{c.wind_speed_mph:.0f} mph {cardinal}",
-             f"  \u00b7  {c.wind_speed_kph:.0f} km/h"),
-            ("GUSTS",         "muted", "arrow_up", None,
-             f"{c.wind_gusts_mph:.0f} mph",
-             f"  \u00b7  {c.wind_gusts_kph:.0f} km/h"),
-            ("PRECIPITATION", "muted", "rain",     None,
-             f"{c.precipitation_in:.2f} in",
-             f"  \u00b7  {c.precipitation_mm:.1f} mm"),
-            ("PRESSURE",      "muted", "gauge",    None,
+            ("WIND",        "muted", "wind",     None, wind_pri,  wind_sec),
+            ("GUSTS",       "muted", "arrow_up", None, gusts_pri, gusts_sec),
+            ("PRECIP",      "muted", "rain",     None, prec_pri,  prec_sec),
+            ("PRESSURE",    "muted", "gauge",    None,
              f"{c.surface_pressure_hpa:.0f} hPa", None),
-            ("VISIBILITY",    "muted", "eye",      None,
-             f"{c.visibility_miles:.1f} mi",
-             f"  \u00b7  {c.visibility_km:.1f} km"),
+            # TODO: visibility values from Open-Meteo look suspect (e.g. 183.5 mi
+            # in overcast conditions). Commenting out until the raw API values
+            # can be audited and confirmed reliable.
+            # ("VISIBILITY",  "muted", "eye",      None,
+            #  f"{c.visibility_miles:.1f} mi",
+            #  f"  \u00b7  {c.visibility_km:.1f} km"),
         ]
 
-        # Stacked: label line 1, value line 2
-        LBL_H   = 32
-        GAP_LV  = 6
-        VAL_H   = 40
-        TOP_PAD = max(4, (ROW_H - LBL_H - GAP_LV - VAL_H) // 2)
-
         for i, (label, icon_color, icon_type, bar_pct, pri_val, sec_val) in enumerate(rows):
-            ry    = STATS_Y0 + i * ROW_H
-            rym   = ry + ROW_H // 2
-            y_lbl = ry + TOP_PAD
-            y_val = y_lbl + LBL_H + GAP_LV
+            ry  = STATS_Y0 + i * ROW_H
+            rym = ry + ROW_H // 2   # vertical centre of row
 
             if i > 0:
                 draw.line([(0, ry), (W, ry)], fill=_hex_to_rgb(SEP), width=1)
 
-            # Icon box
+            # Icon box — centred on row midpoint
             ic_bg  = ((18, 42, 80)  if icon_color == "blue"  else
                       (55, 36, 14)  if icon_color == "amber" else
                       (28, 40, 62))
-            ic_clr = (_hex_to_rgb(BLUE)     if icon_color == "blue"  else
-                      _hex_to_rgb(AMBER)    if icon_color == "amber" else
+            ic_clr = (_hex_to_rgb(BLUE)  if icon_color == "blue"  else
+                      _hex_to_rgb(AMBER) if icon_color == "amber" else
                       _hex_to_rgb(TEXT_MUT))
             draw.rounded_rectangle(
-                [(ICON_X - 18, rym - 18), (ICON_X + 18, rym + 18)],
+                [(ICON_X - 23, rym - 23), (ICON_X + 23, rym + 23)],
                 radius=7, fill=ic_bg)
-            _draw_icon(draw, ICON_X, rym, 10, icon_type, ic_clr)
+            _draw_icon(draw, ICON_X, rym, 13, icon_type, ic_clr)
 
-            # Line 1 — label
-            draw.text((LBL_X, y_lbl), label, font=f_lbl, fill=TEXT_PRI)
+            # Label — vertically centred, muted colour for hierarchy
+            lb = draw.textbbox((0, 0), label, font=f_lbl)
+            lh = lb[3] - lb[1]
+            lw = lb[2] - lb[0]
+            draw.text((LBL_X, rym - lh // 2), label, font=f_lbl, fill=TEXT_MUT)
 
-            # Line 2 — value
+            # Value(s) — vertically centred, right-aligned
             if bar_pct is not None:
-                bbox   = draw.textbbox((0, 0), pri_val, font=f_pri)
-                pw, ph = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                vb     = draw.textbbox((0, 0), pri_val, font=f_pri)
+                pw, ph = vb[2] - vb[0], vb[3] - vb[1]
+                bar_x1 = LBL_X + lw + 16
                 bar_x2 = VAL_X - pw - 12
-                bar_cy = y_val + ph // 2
                 bar_fill = _hex_to_rgb(BLUE if icon_color == "blue" else AMBER)
-                draw.rounded_rectangle(
-                    [(LBL_X, bar_cy - 3), (bar_x2, bar_cy + 3)],
-                    radius=3, fill=_hex_to_rgb(SEP))
-                fill_w = int((bar_x2 - LBL_X) * min(bar_pct, 100.0) / 100.0)
-                if fill_w > 4:
+                if bar_x2 > bar_x1 + 4:
                     draw.rounded_rectangle(
-                        [(LBL_X, bar_cy - 3), (LBL_X + fill_w, bar_cy + 3)],
-                        radius=3, fill=bar_fill)
-                draw.text((VAL_X - pw, y_val), pri_val, font=f_pri, fill=TEXT_PRI)
+                        [(bar_x1, rym - 3), (bar_x2, rym + 3)],
+                        radius=3, fill=_hex_to_rgb(SEP))
+                    fill_w = int((bar_x2 - bar_x1) * min(bar_pct, 100.0) / 100.0)
+                    if fill_w > 4:
+                        draw.rounded_rectangle(
+                            [(bar_x1, rym - 3), (bar_x1 + fill_w, rym + 3)],
+                            radius=3, fill=bar_fill)
+                draw.text((VAL_X - pw, rym - ph // 2), pri_val, font=f_pri, fill=TEXT_PRI)
             elif sec_val:
-                bp = draw.textbbox((0, 0), pri_val, font=f_pri)
-                bs = draw.textbbox((0, 0), sec_val, font=f_sec)
+                bp     = draw.textbbox((0, 0), pri_val, font=f_pri)
+                bs     = draw.textbbox((0, 0), sec_val, font=f_sec)
                 pw, ph = bp[2] - bp[0], bp[3] - bp[1]
                 sw, sh = bs[2] - bs[0], bs[3] - bs[1]
-                x_sec = VAL_X - sw
-                x_pri = x_sec - pw
-                draw.text((x_pri, y_val), pri_val, font=f_pri, fill=TEXT_PRI)
-                draw.text((x_sec, y_val + (ph - sh) // 2), sec_val,
-                          font=f_sec, fill=TEXT_MUT)
+                x_sec  = VAL_X - sw
+                x_pri  = x_sec - pw
+                draw.text((x_pri, rym - ph // 2), pri_val, font=f_pri, fill=TEXT_PRI)
+                draw.text((x_sec, rym - sh // 2), sec_val, font=f_sec, fill=TEXT_MUT)
             else:
-                bbox   = draw.textbbox((0, 0), pri_val, font=f_pri)
-                pw, ph = bbox[2] - bbox[0], bbox[3] - bbox[1]
-                draw.text((VAL_X - pw, y_val), pri_val, font=f_pri, fill=TEXT_PRI)
+                vb     = draw.textbbox((0, 0), pri_val, font=f_pri)
+                pw, ph = vb[2] - vb[0], vb[3] - vb[1]
+                draw.text((VAL_X - pw, rym - ph // 2), pri_val, font=f_pri, fill=TEXT_PRI)
 
         return _to_png(img)
 
@@ -635,15 +654,15 @@ class WeatherImageFormatter:
         c   = report.current
         loc = report.location.display_name
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
-        tags = "#ZipWx"
+        tags = ""
         m = re.search(r',\s*([A-Z]{2})\s*$', loc)
         if m:
-            tags += f" #{m.group(1)}Wx"
+            tags = f" #{m.group(1)}Wx"
         text = (
             f"{loc}: {c.weather_description}, "
             f"{c.temperature_f:.0f}F ({c.temperature_c:.0f}C), "
             f"humidity {c.humidity_pct:.0f}%, "
-            f"wind {c.wind_speed_mph:.0f}mph {cardinal}. {tags}"
+            f"wind {c.wind_speed_mph:.0f}mph {cardinal}.{tags}"
         )
         return text[:300]
 

@@ -47,6 +47,7 @@ def _make_settings(skip_historical: bool = True) -> Settings:
         log_level="DEBUG",
         weather_cache_ttl_minutes=30,
         skip_historical=skip_historical,
+        post_mode="text",
     )
 
 
@@ -64,39 +65,32 @@ def _mock_channel(name: str) -> MagicMock:
 class TestFirehoseLocationExtraction:
     """FirehoseAlertChannel._extract_location handles all real-world post patterns."""
 
-    def test_hashtag_zip(self):
-        assert FirehoseAlertChannel._extract_location("#ZipWx 80503") == "80503"
-
-    def test_hashtag_city_state(self):
-        loc = FirehoseAlertChannel._extract_location("#ZipWx Denver, CO")
-        assert loc == "Denver, CO"
-
     def test_mention_zip(self):
         assert FirehoseAlertChannel._extract_location("@zipwx.bsky.social 80501") == "80501"
+
+    def test_mention_city_state(self):
+        loc = FirehoseAlertChannel._extract_location("@zipwx.bsky.social Denver, CO")
+        assert loc == "Denver, CO"
 
     def test_mention_city(self):
         loc = FirehoseAlertChannel._extract_location("@zipwx.bsky.social Seattle, WA")
         assert loc and "Seattle" in loc
 
-    def test_hashtag_bare_city(self):
-        loc = FirehoseAlertChannel._extract_location("#ZipWx Minneapolis")
+    def test_mention_bare_city(self):
+        loc = FirehoseAlertChannel._extract_location("@zipwx.bsky.social Minneapolis")
         assert loc == "Minneapolis"
 
-    def test_hashtag_mixed_case(self):
-        assert FirehoseAlertChannel._extract_location("#zipwx 94102") == "94102"
+    def test_mention_mixed_case(self):
+        assert FirehoseAlertChannel._extract_location("@ZIPWX.BSKY.SOCIAL 94102") == "94102"
 
-    def test_zip_with_trailing_hashtag(self):
-        assert FirehoseAlertChannel._extract_location("#ZipWx 80501 #weather") == "80501"
+    def test_mention_zip_with_trailing_hashtag(self):
+        assert FirehoseAlertChannel._extract_location("@zipwx.bsky.social 80501 #weather") == "80501"
 
     def test_no_trigger_returns_none(self):
         assert FirehoseAlertChannel._extract_location("Just a normal post") is None
 
     def test_trigger_no_location_returns_none(self):
-        assert FirehoseAlertChannel._extract_location("#ZipWx") is None
-
-    def test_zip_fallback(self):
-        """Zip code anywhere in text if trigger regex doesn't capture it."""
-        assert FirehoseAlertChannel._extract_location("weather for 80501 today #ZipWx") == "80501"
+        assert FirehoseAlertChannel._extract_location("@zipwx.bsky.social") is None
 
 
 class TestDMLocationExtraction:
@@ -109,22 +103,15 @@ class TestDMLocationExtraction:
         loc = DMAlertChannel._extract_location("Denver, CO please")
         assert loc and "Denver" in loc
 
-    def test_hashtagged_city(self):
-        loc = DMAlertChannel._extract_location("#ZipWx Minneapolis")
-        # After stripping #ZipWx: "Minneapolis"
-        assert loc == "Minneapolis"
-
     def test_plain_city_name(self):
-        # Falls through to clean text fallback (3–50 chars)
         loc = DMAlertChannel._extract_location("Minneapolis")
         assert loc == "Minneapolis"
 
     def test_empty_message_returns_none(self):
         assert DMAlertChannel._extract_location("") is None
 
-    def test_only_hashtag_returns_none(self):
-        # "#ZipWx" stripped → empty string → None
-        assert DMAlertChannel._extract_location("#ZipWx") is None
+    def test_short_text_returns_none(self):
+        assert DMAlertChannel._extract_location("hi") is None
 
 
 # ---------------------------------------------------------------------------

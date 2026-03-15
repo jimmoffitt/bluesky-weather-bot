@@ -25,6 +25,7 @@ Latency timestamps (all ISO8601 UTC, set by the orchestrator bot.py):
                               (from the AT Protocol record; NULL for file alerts)
     ingested_at             — when the alert channel dispatched the AlertRequest
     processing_started_at   — when WeatherService.lookup() was called
+    formatting_started_at   — when lookup returned; formatting is about to begin
     processing_finished_at  — when format_thread() returned, response ready to send
     is_slow                 — 1 if end-to-end latency exceeded SLOW_REQUEST_THRESHOLD_SEC
 
@@ -34,7 +35,8 @@ Latency timestamps (all ISO8601 UTC, set by the orchestrator bot.py):
 
 Latency intervals (computed by the latency_summary view):
   receive_latency_sec     = ingested_at - source_created_at
-  processing_latency_sec  = processing_finished_at - processing_started_at
+  lookup_latency_sec      = formatting_started_at - processing_started_at
+  formatting_latency_sec  = processing_finished_at - formatting_started_at
   delivery_latency_sec    = delivery_finished_at - delivery_started_at
   end_to_end_latency_sec  = delivery_finished_at - source_created_at
 
@@ -147,9 +149,13 @@ class Database:
                 processing_started_at   TEXT,
                 -- When the orchestrator called WeatherService.lookup().
 
+                formatting_started_at   TEXT,
+                -- When WeatherService.lookup() returned; formatting is about to begin.
+                -- lookup_latency = formatting_started_at - processing_started_at
+
                 processing_finished_at  TEXT,
                 -- When format_thread() returned, response ready to send.
-                -- processing_latency = processing_finished_at - processing_started_at
+                -- formatting_latency = processing_finished_at - formatting_started_at
 
                 is_slow                 INTEGER NOT NULL DEFAULT 0
                 -- 1 if end-to-end latency exceeded SLOW_REQUEST_THRESHOLD_SEC.
@@ -231,6 +237,32 @@ class Database:
             );
 
             -- --------------------------------------------------------
+            -- user_prefs: per-user display preferences set via DM
+            -- --------------------------------------------------------
+            CREATE TABLE IF NOT EXISTS user_prefs (
+                user_did      TEXT PRIMARY KEY,
+                -- Bluesky DID (did:plc:...)
+
+                handle        TEXT,
+                -- Stored for display; not used as a key
+
+                units         TEXT NOT NULL DEFAULT 'imperial',
+                -- 'imperial': °F primary, mph, in
+                -- 'metric':   °C primary, km/h, mm
+
+                home_raw      TEXT,
+                -- What the user typed, e.g. "Denver, CO" or "80501"
+
+                home_display  TEXT,
+                -- Resolved canonical name, e.g. "Denver, CO"
+
+                home_lat      REAL,
+                home_lon      REAL,
+
+                updated_at    TEXT NOT NULL
+            );
+
+            -- --------------------------------------------------------
             -- file_inbox_log: audit trail for file watcher
             -- --------------------------------------------------------
             CREATE TABLE IF NOT EXISTS file_inbox_log (
@@ -253,7 +285,7 @@ class Database:
             -- --------------------------------------------------------
             -- latency_summary view
             --
-            -- Computes all four latency intervals per completed request.
+            -- Computes all five latency intervals per completed request.
             -- JULIANDAY arithmetic gives fractional days; x86400 = seconds.
             -- NULLs propagate naturally: file alerts with no source_created_at
             -- will have NULL for receive_latency and end_to_end_latency.
@@ -270,6 +302,7 @@ class Database:
                 r.source_created_at,
                 r.ingested_at,
                 r.processing_started_at,
+                r.formatting_started_at,
                 r.processing_finished_at,
                 resp.delivery_started_at,
                 resp.delivery_finished_at,
@@ -280,11 +313,17 @@ class Database:
                     * 86400.0, 3
                 ) AS receive_latency_sec,
 
-                -- Time spent on weather lookup + formatting
+                -- Time spent calling the weather API
                 ROUND(
-                    (JULIANDAY(r.processing_finished_at) - JULIANDAY(r.processing_started_at))
+                    (JULIANDAY(r.formatting_started_at) - JULIANDAY(r.processing_started_at))
                     * 86400.0, 3
-                ) AS processing_latency_sec,
+                ) AS lookup_latency_sec,
+
+                -- Time spent rendering the weather report into post text
+                ROUND(
+                    (JULIANDAY(r.processing_finished_at) - JULIANDAY(r.formatting_started_at))
+                    * 86400.0, 3
+                ) AS formatting_latency_sec,
 
                 -- Time for Bluesky API to accept the post
                 ROUND(
@@ -303,6 +342,18 @@ class Database:
                 ON  resp.request_id = r.id
                 AND resp.post_index  = 0;
         """)
+        # Migrate existing databases that predate formatting_started_at
+        existing = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(requests)").fetchall()
+        }
+        if "formatting_started_at" not in existing:
+            self._conn.execute(
+                "ALTER TABLE requests ADD COLUMN formatting_started_at TEXT"
+            )
+            self._conn.commit()
+            logger.info("[db] Migrated: added formatting_started_at column")
+
         self._conn.commit()
 
     # ------------------------------------------------------------------
@@ -388,6 +439,15 @@ class Database:
         assert self._conn
         self._conn.execute(
             "UPDATE requests SET processing_started_at = ? WHERE id = ?",
+            (_now(), request_id),
+        )
+        self._conn.commit()
+
+    def update_request_formatting_start(self, request_id: int) -> None:
+        """Call immediately after WeatherService.lookup() returns, before formatting."""
+        assert self._conn
+        self._conn.execute(
+            "UPDATE requests SET formatting_started_at = ? WHERE id = ?",
             (_now(), request_id),
         )
         self._conn.commit()
@@ -584,6 +644,79 @@ class Database:
         return self._conn.execute("SELECT COUNT(*) FROM seen_dm_ids").fetchone()[0]
 
     # ------------------------------------------------------------------
+    # user_prefs
+    # ------------------------------------------------------------------
+
+    def get_user_prefs(self, did: str) -> Optional[dict]:
+        """Return the prefs row for did, or None if not yet saved."""
+        assert self._conn
+        row = self._conn.execute(
+            "SELECT * FROM user_prefs WHERE user_did = ?", (did,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def set_user_prefs(
+        self,
+        did: str,
+        handle: Optional[str] = None,
+        units: Optional[str] = None,
+        home_raw: Optional[str] = None,
+        home_display: Optional[str] = None,
+        home_lat: Optional[float] = None,
+        home_lon: Optional[float] = None,
+    ) -> None:
+        """
+        Upsert preference columns for did.
+        Only explicitly-passed keyword args are written; others keep
+        their current (or default) values.
+        """
+        assert self._conn
+        existing = self.get_user_prefs(did)
+        if existing is None:
+            self._conn.execute(
+                """INSERT INTO user_prefs
+                   (user_did, handle, units, home_raw, home_display,
+                    home_lat, home_lon, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (did, handle, units or "imperial",
+                 home_raw, home_display, home_lat, home_lon, _now()),
+            )
+        else:
+            updates: dict = {"updated_at": _now()}
+            if handle       is not None: updates["handle"]       = handle
+            if units        is not None: updates["units"]        = units
+            if home_raw     is not None: updates["home_raw"]     = home_raw
+            if home_display is not None: updates["home_display"] = home_display
+            if home_lat     is not None: updates["home_lat"]     = home_lat
+            if home_lon     is not None: updates["home_lon"]     = home_lon
+            cols = ", ".join(f"{k} = ?" for k in updates)
+            vals = list(updates.values()) + [did]
+            self._conn.execute(
+                f"UPDATE user_prefs SET {cols} WHERE user_did = ?", vals
+            )
+        self._conn.commit()
+
+    def clear_home(self, did: str) -> None:
+        """Remove saved home location; leave other prefs intact."""
+        assert self._conn
+        self._conn.execute(
+            """UPDATE user_prefs
+               SET home_raw=NULL, home_display=NULL,
+                   home_lat=NULL, home_lon=NULL, updated_at=?
+               WHERE user_did = ?""",
+            (_now(), did),
+        )
+        self._conn.commit()
+
+    def reset_prefs(self, did: str) -> None:
+        """Delete the entire prefs row, reverting to all defaults."""
+        assert self._conn
+        self._conn.execute(
+            "DELETE FROM user_prefs WHERE user_did = ?", (did,)
+        )
+        self._conn.commit()
+
+    # ------------------------------------------------------------------
     # file_inbox_log
     # ------------------------------------------------------------------
 
@@ -629,7 +762,8 @@ class Database:
             "channel": "firehose",
             "sample_size": 142,
             "avg_receive_latency_sec": 1.24,
-            "avg_processing_latency_sec": 3.87,
+            "avg_lookup_latency_sec": 2.91,
+            "avg_formatting_latency_sec": 0.96,
             "avg_delivery_latency_sec": 0.61,
             "avg_end_to_end_latency_sec": 5.72,
             "p95_end_to_end_latency_sec": 12.4,
@@ -647,12 +781,13 @@ class Database:
         row = self._conn.execute(
             f"""
             SELECT
-                COUNT(*)                        AS n,
-                AVG(ls.receive_latency_sec)     AS avg_receive,
-                AVG(ls.processing_latency_sec)  AS avg_processing,
-                AVG(ls.delivery_latency_sec)    AS avg_delivery,
-                AVG(ls.end_to_end_latency_sec)  AS avg_e2e,
-                SUM(r.is_slow)                  AS slow_count
+                COUNT(*)                          AS n,
+                AVG(ls.receive_latency_sec)       AS avg_receive,
+                AVG(ls.lookup_latency_sec)        AS avg_lookup,
+                AVG(ls.formatting_latency_sec)    AS avg_formatting,
+                AVG(ls.delivery_latency_sec)      AS avg_delivery,
+                AVG(ls.end_to_end_latency_sec)    AS avg_e2e,
+                SUM(r.is_slow)                    AS slow_count
             FROM latency_summary ls
             JOIN requests r ON r.id = ls.request_id
             {where}
@@ -664,15 +799,16 @@ class Database:
         slow_count = row["slow_count"] or 0
 
         return {
-            "channel":                    channel or "all",
-            "sample_size":                n,
-            "avg_receive_latency_sec":    _r(row["avg_receive"]),
-            "avg_processing_latency_sec": _r(row["avg_processing"]),
-            "avg_delivery_latency_sec":   _r(row["avg_delivery"]),
-            "avg_end_to_end_latency_sec": _r(row["avg_e2e"]),
-            "p95_end_to_end_latency_sec": self._compute_p95_e2e(where, params),
-            "slow_request_count":         slow_count,
-            "slow_request_pct":           _r(slow_count / n * 100) if n else 0.0,
+            "channel":                      channel or "all",
+            "sample_size":                  n,
+            "avg_receive_latency_sec":      _r(row["avg_receive"]),
+            "avg_lookup_latency_sec":       _r(row["avg_lookup"]),
+            "avg_formatting_latency_sec":   _r(row["avg_formatting"]),
+            "avg_delivery_latency_sec":     _r(row["avg_delivery"]),
+            "avg_end_to_end_latency_sec":   _r(row["avg_e2e"]),
+            "p95_end_to_end_latency_sec":   self._compute_p95_e2e(where, params),
+            "slow_request_count":           slow_count,
+            "slow_request_pct":             _r(slow_count / n * 100) if n else 0.0,
         }
 
     def get_latency_stats_by_channel(self) -> list[dict]:

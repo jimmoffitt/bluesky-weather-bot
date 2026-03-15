@@ -6,19 +6,16 @@ and streams all public posts in real time. Posts that match the configured
 trigger patterns (hashtags and/or mention of the bot handle) are parsed
 for a location and dispatched as AlertRequests.
 
-Trigger detection (configurable):
-  - Hashtag:  post contains #ZipWx (case-insensitive)
+Trigger detection:
   - Mention:  post mentions @<bot_handle>
-  - Both:     post contains either trigger (default)
 
 Location extraction: scans post text for a zip code or "City, ST" pattern
-following the trigger tag/mention.
+following the mention.
 
 Pattern examples the parser handles:
-  "#ZipWx 80501"
-  "#ZipWx Denver, CO"
-  "#ZipWx Portland"           ← ambiguous; resolver will return both
-  "@zipwx.bsky.social 94102"
+  "@zipwx.bsky.social 80501"
+  "@zipwx.bsky.social Denver, CO"
+  "@zipwx.bsky.social Portland"   ← ambiguous; resolver will return both
 
 Dependencies: pip install atproto
 """
@@ -38,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Regex to find a location token after the trigger word/mention.
 # Captures: 5-digit zip, or "City, ST", or a bare city name as fallback.
 _LOCATION_RE = re.compile(
-    r"(?:#[Zz]ip[Ww]x|@\S+)"   # trigger: hashtag or mention
+    r"(?:@\S+)"                  # trigger: mention
     r"\s+"                       # whitespace separator
     r"([A-Za-z0-9][^#@\n]{2,40}?)(?:\s*#|\s*@|$)",  # location token
     re.IGNORECASE,
@@ -77,7 +74,7 @@ class FirehoseAlertChannel(AlertChannel):
             daemon=True,
         )
         self._thread.start()
-        logger.info("[firehose] Started — watching for #ZipWx and @%s", self._bot_handle)
+        logger.info("[firehose] Started — watching for @%s mentions", self._bot_handle)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -188,9 +185,8 @@ class FirehoseAlertChannel(AlertChannel):
             return None
 
     def _is_trigger(self, text: str) -> bool:
-        """Returns True if the post text contains a valid bot trigger."""
-        lower = text.lower()
-        return "#zipwx" in lower or f"@{self._bot_handle}" in lower
+        """Returns True if the post text mentions the bot handle."""
+        return f"@{self._bot_handle}" in text.lower()
 
     def _build_request(self, text: str, repo: str, op) -> Optional[AlertRequest]:
         """
@@ -211,6 +207,7 @@ class FirehoseAlertChannel(AlertChannel):
         return AlertRequest(
             source_channel="firehose",
             requester_handle=repo,
+            requester_did=repo,   # repo in AT Protocol firehose is the user's DID
             raw_location=raw_location,
             raw_content=text,
             reply_to_uri=reply_uri,

@@ -57,6 +57,15 @@ class AlertRequest:
     # For file channel: the source filename for traceability
     source_file: Optional[str] = None
 
+    # Bluesky DID of the requester (set by firehose/DM channels)
+    requester_did: Optional[str] = None
+
+    # Set by DMAlertChannel when the message is a preference command,
+    # not a weather location request.
+    # Values: "set_home" | "set_units_imperial" | "set_units_metric" |
+    #         "clear_home" | "reset_prefs" | "settings" | "help"
+    command: Optional[str] = None
+
     # Set by orchestrator after DB insert
     db_id: Optional[int] = None
 
