@@ -44,7 +44,10 @@ class Settings:
     skip_historical: bool
 
     # Output mode
-    post_mode: str  # "text" | "image"
+    post_mode: str   # "text" | "image"
+
+    # Server identification (shown in latency footer)
+    server_type: str  # "laptop" | "Pi"
 
     @classmethod
     def load(cls, env_file: str | Path = ".local.env") -> "Settings":
@@ -87,6 +90,7 @@ class Settings:
             weather_cache_ttl_minutes=opt_int("WEATHER_CACHE_TTL_MINUTES", 30),
             skip_historical=opt_bool("SKIP_HISTORICAL", False),
             post_mode=opt("POST_MODE", "text").lower(),
+            server_type=opt("SERVER_TYPE", "laptop"),
         )
 
     def ensure_directories(self) -> None:

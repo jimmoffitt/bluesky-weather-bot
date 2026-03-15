@@ -585,7 +585,7 @@ class WeatherImageFormatter:
         strip_left = MARGIN + (_day_total - 6 * col_w) // 2
 
         # --- Compute card height ---
-        H_HDR       = 63     # header bar + accent line
+        H_HDR       = 76     # header bar (2 lines: location + timestamp) + accent line
         H_HR_LBL    = 34     # "NEXT 12 HOURS" section label
         H_HR_ROW    = 118    # height of one hourly row (6 cols)
         H_HR_GAP    = 10     # gap between the two hourly rows
@@ -609,9 +609,18 @@ class WeatherImageFormatter:
         loc = report.location.display_name
 
         # --- Header ---
-        draw.rectangle([(0, 0), (W, 60)], fill=_hex_to_rgb(HDR_BG))
-        _text_centered(draw, 16, f"Forecast  \u2014  {loc}", _font_syne(22), TEXT_PRI, W)
-        draw.rectangle([(0, 60), (W, 63)], fill=_hex_to_rgb(BLUE))
+        ts      = report.current.timestamp
+        tz      = _tz_abbr(report.location.timezone, ts)
+        dow     = ts.strftime("%a").upper()
+        mon     = ts.strftime("%b").upper()
+        hour12  = ts.hour % 12 or 12
+        ampm    = "AM" if ts.hour < 12 else "PM"
+        ts_str  = f"{dow} {mon} {ts.day}  \u00b7  {hour12}:{ts.strftime('%M')} {ampm} {tz}"
+
+        draw.rectangle([(0, 0), (W, 73)], fill=_hex_to_rgb(HDR_BG))
+        _text_centered(draw, 10, loc,    _font_syne(22),   TEXT_PRI, W)
+        _text_centered(draw, 42, ts_str, _font_mono(14),   TEXT_MUT, W)
+        draw.rectangle([(0, 73), (W, 76)], fill=_hex_to_rgb(BLUE))
         y = H_HDR
 
         # --- Hourly strip ---

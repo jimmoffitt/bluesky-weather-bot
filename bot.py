@@ -252,7 +252,7 @@ class ZipWx:
             if use_images:
                 images, alts, caption = self._image_formatter.format_images(report, units=units)
                 thread_posts = [caption]
-                _append_latency_footer(thread_posts, request.received_at)
+                _append_latency_footer(thread_posts, request.received_at, self._settings.server_type)
                 payload = NotificationPayload(
                     request_db_id=db_id,
                     post_thread=thread_posts,
@@ -265,7 +265,7 @@ class ZipWx:
                 )
             else:
                 thread_posts = self._formatter.format_thread(report, units=units)
-                _append_latency_footer(thread_posts, request.received_at)
+                _append_latency_footer(thread_posts, request.received_at, self._settings.server_type)
                 payload = NotificationPayload(
                     request_db_id=db_id,
                     post_thread=thread_posts,
@@ -469,14 +469,15 @@ def _now() -> str:
     return datetime.utcnow().isoformat()
 
 
-def _append_latency_footer(thread_posts: list[str], received_at: datetime) -> None:
+def _append_latency_footer(thread_posts: list[str], received_at: datetime,
+                           server_type: str = "laptop") -> None:
     """
     Appends a latency footer to the last post in the thread.
     Measures time from when the request was ingested to now (just before delivery).
     Skips silently if the footer would push the last post over 300 chars.
     """
     elapsed = (datetime.utcnow() - received_at).total_seconds()
-    footer = f"\n⏱ {elapsed:.1f}s"
+    footer = f"\n\nresponded in {elapsed:.1f}s on a {server_type}"
     if len(thread_posts[-1]) + len(footer) <= 300:
         thread_posts[-1] += footer
 
