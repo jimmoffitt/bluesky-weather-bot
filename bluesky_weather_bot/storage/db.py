@@ -157,8 +157,13 @@ class Database:
                 -- When format_thread() returned, response ready to send.
                 -- formatting_latency = processing_finished_at - formatting_started_at
 
-                is_slow                 INTEGER NOT NULL DEFAULT 0
+                is_slow                 INTEGER NOT NULL DEFAULT 0,
                 -- 1 if end-to-end latency exceeded SLOW_REQUEST_THRESHOLD_SEC.
+
+                source_uri              TEXT
+                -- AT-URI of the triggering post (firehose) or NULL.
+                -- Used for deduplication: same post must never be processed twice.
+                -- DMs use seen_dm_ids instead; source_uri is NULL for DMs and files.
             );
 
             CREATE INDEX IF NOT EXISTS idx_requests_status
@@ -342,7 +347,7 @@ class Database:
                 ON  resp.request_id = r.id
                 AND resp.post_index  = 0;
         """)
-        # Migrate existing databases that predate formatting_started_at
+        # Migrate existing databases that predate newer columns
         existing = {
             row[1]
             for row in self._conn.execute("PRAGMA table_info(requests)").fetchall()
@@ -351,8 +356,20 @@ class Database:
             self._conn.execute(
                 "ALTER TABLE requests ADD COLUMN formatting_started_at TEXT"
             )
-            self._conn.commit()
             logger.info("[db] Migrated: added formatting_started_at column")
+        if "source_uri" not in existing:
+            self._conn.execute(
+                "ALTER TABLE requests ADD COLUMN source_uri TEXT"
+            )
+            logger.info("[db] Migrated: added source_uri column")
+
+        # Always ensure the dedup index exists — safe to run on every connect
+        # because source_uri is now guaranteed to be present.
+        self._conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_requests_source_uri
+                ON requests(source_uri)
+                WHERE source_uri IS NOT NULL AND source_channel != 'dm'
+        """)
 
         self._conn.commit()
 
@@ -372,22 +389,27 @@ class Database:
         source_created_at: Optional[str] = None,
         ingested_at: Optional[str] = None,
         status: str = "pending",
-    ) -> int:
+        source_uri: Optional[str] = None,
+    ) -> Optional[int]:
         """
-        Insert a new request row. Returns the new row ID.
+        Insert a new request row. Returns the new row ID, or None if the
+        source_uri already exists (duplicate — safe to drop silently).
 
         source_created_at: ISO8601 from the AT Protocol record. None for file alerts.
         ingested_at:       Defaults to now() if not provided.
+        source_uri:        AT-URI of the triggering post. Enforces deduplication
+                           for firehose posts so reconnects never double-process.
         """
         assert self._conn
         cur = self._conn.execute(
             """
-            INSERT INTO requests (
+            INSERT OR IGNORE INTO requests (
                 source_channel, requester_handle,
                 raw_location, resolved_location, resolved_lat, resolved_lon,
                 raw_content, status,
-                source_created_at, ingested_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_created_at, ingested_at,
+                source_uri
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source_channel, requester_handle,
@@ -395,9 +417,12 @@ class Database:
                 raw_content, status,
                 source_created_at,
                 ingested_at or _now(),
+                source_uri,
             ),
         )
         self._conn.commit()
+        if cur.lastrowid == 0 or cur.rowcount == 0:
+            return None
         return cur.lastrowid
 
     def update_request_resolved(

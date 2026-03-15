@@ -145,8 +145,12 @@ class FirehoseAlertChannel(AlertChannel):
                                         logger.debug("[firehose] Dedup: skipping %s", request.reply_to_uri)
                                         continue
                                     self._seen_uris.add(request.reply_to_uri)
+                                    # Trim oldest half when the set gets large,
+                                    # preserving recent entries rather than clearing all.
                                     if len(self._seen_uris) > 10_000:
+                                        keep = set(list(self._seen_uris)[5_000:])
                                         self._seen_uris.clear()
+                                        self._seen_uris.update(keep)
                             self._dispatch(request)
             except Exception as exc:
                 logger.debug("[firehose] Skipping malformed message: %s", exc)

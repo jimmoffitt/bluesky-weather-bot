@@ -168,7 +168,7 @@ class ZipWx:
             request.raw_location, request.command,
         )
 
-        # Persist the request
+        # Persist the request — returns None if this source_uri was already processed
         db_id = self._db.save_request(
             source_channel=request.source_channel,
             raw_content=request.raw_content,
@@ -176,7 +176,14 @@ class ZipWx:
             raw_location=request.raw_location,
             status="pending",
             ingested_at=request.received_at.isoformat(),
+            source_uri=request.reply_to_uri if request.source_channel == "firehose" else None,
         )
+        if db_id is None:
+            logger.debug(
+                "[bot] Duplicate request dropped: channel=%s uri=%s",
+                request.source_channel, request.reply_to_uri,
+            )
+            return
         request.db_id = db_id
 
         # DM preference commands are handled separately
