@@ -834,9 +834,11 @@ class WeatherImageFormatter:
         import re
         c   = report.current
         loc = report.location.display_name
+        if report.location.zip_code:
+            loc = f"{loc} ({report.location.zip_code})"
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
         tags = ""
-        m = re.search(r',\s*([A-Z]{2})\s*$', loc)
+        m = re.search(r',\s*([A-Z]{2})\b', loc)
         if m:
             tags = f" #{m.group(1)}Wx"
         text = (
@@ -844,6 +846,7 @@ class WeatherImageFormatter:
             f"{c.temperature_f:.0f}F ({c.temperature_c:.0f}C), "
             f"humidity {c.humidity_pct:.0f}%, "
             f"wind {c.wind_speed_mph:.0f}mph {cardinal}.{tags}"
+            f"\n\nSee second image for forecast."
         )
         return text[:300]
 

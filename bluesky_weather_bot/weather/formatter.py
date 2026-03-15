@@ -106,6 +106,8 @@ class WeatherFormatter:
     def _post1_current(self, report: WeatherReport, units: str = "imperial") -> str:
         c   = report.current
         loc = report.location.display_name
+        if report.location.zip_code:
+            loc = f"{loc} ({report.location.zip_code})"
 
         ts    = c.timestamp
         day   = ts.day

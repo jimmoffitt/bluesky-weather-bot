@@ -477,7 +477,7 @@ def _append_latency_footer(thread_posts: list[str], received_at: datetime,
     Skips silently if the footer would push the last post over 300 chars.
     """
     elapsed = (datetime.utcnow() - received_at).total_seconds()
-    footer = f"\n\nresponded in {elapsed:.1f}s on a {server_type}"
+    footer = f"\n\nResponded in {elapsed:.1f}s on a {server_type}"
     if len(thread_posts[-1]) + len(footer) <= 300:
         thread_posts[-1] += footer
 
