@@ -134,7 +134,8 @@ class WeatherFormatter:
             precip_str = f"🌧 Precip: {c.precipitation_in:.2f}in ({c.precipitation_mm:.1f}mm)"
 
         lines = [
-            f"📍 {loc} | {ts_str}",
+            f"📍 {loc}",
+            f"🕐 As of {ts_str}",
             f"{emoji} {c.weather_description}",
             f"{temp_str} | {feels_str}",
             f"💧 Humidity: {c.humidity_pct:.0f}%",
