@@ -21,6 +21,8 @@ from bluesky_weather_bot.storage.db import Database
 from bluesky_weather_bot.weather.client import WeatherClient
 from bluesky_weather_bot.weather.models import (
     CurrentConditions,
+    DailyForecast,
+    DailyForecastSlot,
     DailyHistoricalRecord,
     Forecast,
     HistoricalComparison,
@@ -136,13 +138,15 @@ def _report_to_dict(report: WeatherReport) -> dict:
     - datetime objects → isoformat strings
     """
     loc = report.location
-    current_d   = dataclasses.asdict(report.current)
-    forecast_d  = dataclasses.asdict(report.forecast)
-    historical_d = dataclasses.asdict(report.historical)
+    current_d        = dataclasses.asdict(report.current)
+    forecast_d       = dataclasses.asdict(report.forecast)
+    historical_d     = dataclasses.asdict(report.historical)
+    daily_forecast_d = dataclasses.asdict(report.daily_forecast)
 
     _convert_datetimes(current_d)
     _convert_datetimes(forecast_d)
     _convert_datetimes(historical_d)
+    _convert_datetimes(daily_forecast_d)
 
     return {
         "location": {
@@ -156,6 +160,7 @@ def _report_to_dict(report: WeatherReport) -> dict:
         "current": current_d,
         "forecast": forecast_d,
         "historical": historical_d,
+        "daily_forecast": daily_forecast_d,
         "generated_at": report.generated_at.isoformat(),
     }
 
@@ -233,11 +238,32 @@ def _dict_to_report(d: dict) -> WeatherReport:
         ten_year_avg=_parse_daily_record(hist_d.get("ten_year_avg")),
     )
 
+    df_slots = [
+        DailyForecastSlot(
+            date=datetime.fromisoformat(s["date"]),
+            temp_max_f=s["temp_max_f"],
+            temp_max_c=s["temp_max_c"],
+            temp_min_f=s["temp_min_f"],
+            temp_min_c=s["temp_min_c"],
+            precipitation_probability_max_pct=s["precipitation_probability_max_pct"],
+            precipitation_in=s["precipitation_in"],
+            precipitation_mm=s["precipitation_mm"],
+            wind_speed_max_mph=s["wind_speed_max_mph"],
+            wind_speed_max_kph=s["wind_speed_max_kph"],
+            weather_description=s["weather_description"],
+            sunrise=datetime.fromisoformat(s["sunrise"]) if s.get("sunrise") else None,
+            sunset=datetime.fromisoformat(s["sunset"]) if s.get("sunset") else None,
+        )
+        for s in d.get("daily_forecast", {}).get("slots", [])
+    ]
+    daily_forecast = DailyForecast(slots=df_slots)
+
     return WeatherReport(
         location=loc,
         current=current,
         forecast=forecast,
         historical=historical,
+        daily_forecast=daily_forecast,
         generated_at=datetime.fromisoformat(d["generated_at"]),
     )
 

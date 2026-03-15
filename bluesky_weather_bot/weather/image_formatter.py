@@ -1,22 +1,21 @@
 """
 WeatherImageFormatter
 
-Converts a WeatherReport into up to 3 PNG images suitable for a single
+Converts a WeatherReport into 2 PNG images suitable for a single
 Bluesky post with embedded image attachments.
 
 Returns:
     (images: list[bytes], alts: list[str], caption: str)
 
 Images produced:
-  1. Current conditions card  — always present (800 × 500 px)
-  2. Forecast chart           — always present (matplotlib dual-axis)
-  3. Historical comparison card — only when historical data is available (800 × 400 px)
+  1. Current conditions card  — always present (900 × 900 px)
+  2. Forecast card            — 12-hr hourly + 7-day daily + historical (900 px wide)
 
 Requirements:
-    pip install Pillow matplotlib
+    pip install Pillow
 
-Designed for headless operation (Raspberry Pi, CI).  Uses the Agg matplotlib
-backend and DejaVu fonts (available on most Linux systems and macOS).
+Designed for headless operation (Raspberry Pi, CI).  Uses DejaVu fonts
+(available on most Linux systems and macOS).
 
 No emoji — plain ASCII labels only (emoji fonts not reliably available on Pi).
 """
@@ -25,14 +24,9 @@ from __future__ import annotations
 
 import io
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
-
-# Matplotlib MUST be configured before pyplot is imported
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -209,6 +203,32 @@ def _draw_icon(draw: ImageDraw.ImageDraw, cx: int, cy: int, r: int,
         pr = max(2, r // 3)
         draw.ellipse([(cx - pr, cy - pr), (cx + pr, cy + pr)], fill=color)
 
+    elif icon_type in ("sunrise", "sunset"):
+        import math
+        # Horizon line centred vertically
+        draw.line([(cx - r, cy), (cx + r, cy)], fill=color, width=2)
+        # Sun circle above horizon
+        sr   = max(3, int(r * 0.42))
+        scy  = cy - sr - 4
+        draw.ellipse([(cx - sr, scy - sr), (cx + sr, scy + sr)], outline=color, width=2)
+        # Three rays from top half of circle
+        for deg in (-45, 0, 45):
+            rad    = math.radians(deg - 90)
+            inner  = sr + 3
+            outer  = sr + 7
+            draw.line(
+                [(cx + int(inner * math.cos(rad)), scy + int(inner * math.sin(rad))),
+                 (cx + int(outer * math.cos(rad)), scy + int(outer * math.sin(rad)))],
+                fill=color, width=2,
+            )
+        # Arrow below horizon indicating rise (up) or set (down)
+        ah = max(4, r // 3)
+        ay = cy + 4
+        if icon_type == "sunrise":
+            draw.polygon([(cx, ay), (cx - ah, ay + ah), (cx + ah, ay + ah)], fill=color)
+        else:
+            draw.polygon([(cx, ay + ah), (cx - ah, ay), (cx + ah, ay)], fill=color)
+
 
 def _text_centered(draw: ImageDraw.ImageDraw, y: int, text: str,
                    font: ImageFont.ImageFont, fill: str, width: int) -> int:
@@ -287,14 +307,9 @@ class WeatherImageFormatter:
         images.append(card1)
         alts.append(self._alt_current(report))
 
-        chart = self._render_forecast_chart(report)
-        images.append(chart)
-        alts.append(self._alt_forecast(report))
-
-        card3 = self._render_historical_card(report)
-        if card3 is not None:
-            images.append(card3)
-            alts.append(self._alt_historical(report))
+        card2 = self._render_forecast_card(report)
+        images.append(card2)
+        alts.append(self._alt_forecast_card(report))
 
         caption = self._caption(report)
         return images, alts, caption
@@ -408,6 +423,36 @@ class WeatherImageFormatter:
                        f"FEELS LIKE  {feels_val}{feels_u}",
                        _font_mono(27), TEXT_MUT, W)
 
+        # ── Sunrise / Sunset — right side of temperature block ────────────────
+        today_slot = (report.daily_forecast.slots[0]
+                      if report.daily_forecast.slots else None)
+        if today_slot and (today_slot.sunrise or today_slot.sunset):
+            f_sun_lbl  = _font_mono(14)
+            f_sun_time = _font_mono(17, medium=True)
+            icon_r     = 11
+            icon_x     = W - 155
+            text_x     = icon_x + icon_r + 14
+            row_h      = (TEMP_H - 20) // 2
+            row1_y     = H_HDR + 10 + row_h // 2
+            row2_y     = H_HDR + 10 + row_h + row_h // 2
+
+            for is_rise, slot_dt, row_y in (
+                (True,  today_slot.sunrise, row1_y),
+                (False, today_slot.sunset,  row2_y),
+            ):
+                if slot_dt is None:
+                    continue
+                _draw_icon(draw, icon_x, row_y, icon_r,
+                           "sunrise" if is_rise else "sunset",
+                           _hex_to_rgb(AMBER))
+                lbl = "RISE" if is_rise else "SET"
+                lb  = draw.textbbox((0, 0), lbl, font=f_sun_lbl)
+                draw.text((text_x, row_y - (lb[3] - lb[1]) - 1),
+                          lbl, font=f_sun_lbl, fill=TEXT_MUT)
+                time_str = slot_dt.strftime("%I:%M %p").lstrip("0")
+                draw.text((text_x, row_y + 2),
+                          time_str, font=f_sun_time, fill=TEXT_PRI)
+
         # ── Stats rows — single row per metric ────────────────────────────────
         STATS_Y0 = H_HDR + TEMP_H
         ROW_H    = (H - STATS_Y0) // 6
@@ -512,138 +557,265 @@ class WeatherImageFormatter:
         return _to_png(img)
 
     # ------------------------------------------------------------------
-    # Card 3 — Historical comparison  (800 × 400 px)
+    # Card 2 — Forecast card  (12-hr hourly + 7-day daily + historical)
     # ------------------------------------------------------------------
 
-    def _render_historical_card(self, report: WeatherReport) -> Optional[bytes]:
-        h = report.historical
-        if h.year_ago is None and h.ten_year_avg is None:
-            return None
+    def _render_forecast_card(self, report: WeatherReport) -> bytes:
+        MARGIN = 20
 
-        W, H = 800, 400
+        hist = report.historical
+        has_year_ago  = hist.year_ago is not None
+        has_ten_yr    = hist.ten_year_avg is not None
+        has_hist      = has_year_ago or has_ten_yr
+
+        # --- 7-day column widths (content-fit) — define early to size the card ---
+        _W_DAY  = 62
+        _W_DESC = 150
+        _W_HILO = 130
+        _W_PREC = 46
+        _W_WIND = 62
+        _GAP    = 16
+        _day_total = _W_DAY + _GAP + _W_DESC + _GAP + _W_HILO + _GAP + _W_PREC + _GAP + _W_WIND
+
+        # Card width fits snugly around the 7-day content
+        W = _day_total + 2 * MARGIN
+
+        # Hourly strip: fixed 60px columns, centered within the day content area
+        col_w      = 60
+        strip_left = MARGIN + (_day_total - 6 * col_w) // 2
+
+        # --- Compute card height ---
+        H_HDR       = 63     # header bar + accent line
+        H_HR_LBL    = 34     # "NEXT 12 HOURS" section label
+        H_HR_ROW    = 118    # height of one hourly row (6 cols)
+        H_HR_GAP    = 10     # gap between the two hourly rows
+        H_HR        = 2 * H_HR_ROW + H_HR_GAP
+        H_DIV       = 6      # divider gap
+        H_DAY_LBL   = 34     # "7-DAY FORECAST" section label
+        H_DAY_ROW   = 48     # height of each daily row
+        H_DAY       = 7 * H_DAY_ROW
+        H_HIST_LBL  = 34     # "HISTORICAL" section label
+        H_HIST_BLK  = 60     # height of each historical block
+        H_FOOT      = 32
+
+        H = H_HDR + H_HR_LBL + H_HR + H_DIV + H_DAY_LBL + H_DAY
+        if has_hist:
+            H += H_DIV + H_HIST_LBL
+            if has_year_ago:  H += H_HIST_BLK
+            if has_ten_yr:    H += H_HIST_BLK
+        H += H_FOOT
+
         img, draw = _new_card(W, H)
         loc = report.location.display_name
 
-        y = _header_bar(draw, W, 70, f"Historical Comparison  —  {loc}", "")
-        y += 20
-        pad = 60
-        f_label = _font(13)
-        f_val   = _font(20, bold=True)
-        f_sub   = _font(15)
+        # --- Header ---
+        draw.rectangle([(0, 0), (W, 60)], fill=_hex_to_rgb(HDR_BG))
+        _text_centered(draw, 16, f"Forecast  \u2014  {loc}", _font_syne(22), TEXT_PRI, W)
+        draw.rectangle([(0, 60), (W, 63)], fill=_hex_to_rgb(BLUE))
+        y = H_HDR
 
-        def _draw_block(rec: DailyHistoricalRecord, header: str, y0: int) -> int:
-            draw.text((pad, y0), header, font=_font(15, bold=True), fill=TEXT_SKY)
-            y0 += 24
-            draw.text((pad, y0),
-                      f"Hi {rec.temp_max_f:.0f}F ({rec.temp_max_c:.0f}C)"
-                      f"  /  Lo {rec.temp_min_f:.0f}F ({rec.temp_min_c:.0f}C)",
-                      font=f_val, fill=TEXT_AMB)
-            y0 += 28
-            draw.text((pad, y0),
-                      f"Precip {rec.precipitation_in:.2f}in  |  "
-                      f"Max wind {rec.wind_speed_max_mph:.0f}mph",
-                      font=f_sub, fill=TEXT_PRI)
-            return y0 + 40
+        # --- Hourly strip ---
+        f_hr_lbl     = _font_mono(17)
+        hourly_slots = report.forecast.slots[:12]
 
-        if h.year_ago:
-            d = h.year_ago.date
-            date_str = f"{d.strftime('%b')} {d.day}, {d.year}"
-            y = _draw_block(h.year_ago, f"Last year  ({date_str})", y)
-            _draw_hline(draw, y, W, ACCENT)
-            y += 16
+        draw.text((strip_left, y + 8), "NEXT 12 HOURS", font=f_hr_lbl, fill=TEXT_MUT)
+        y += H_HR_LBL
 
-        if h.ten_year_avg:
-            d = h.ten_year_avg.date
-            date_str = f"{d.strftime('%b')} {d.day}"
-            y = _draw_block(h.ten_year_avg, f"10-year avg  ({date_str} +/-7 days)", y)
+        f_hr_time  = _font_mono(14)
+        f_hr_temp  = _font_syne(18)
+        f_hr_wind  = _font_mono(13)
+        f_hr_pct   = _font_mono(12)
 
-        # Footer
-        f_foot = _font(12)
-        footer = "ZipWx Bot  |  Data: Open-Meteo"
-        bbox   = draw.textbbox((0, 0), footer, font=f_foot)
-        fw     = bbox[2] - bbox[0]
-        draw.text((W - fw - 20, H - 22), footer, font=f_foot, fill=TEXT_SEC)
+        def _draw_hourly_row(slots_row, row_y):
+            for i, slot in enumerate(slots_row):
+                cx = strip_left + i * col_w + col_w // 2
+
+                if i > 0:
+                    draw.line(
+                        [(strip_left + i * col_w, row_y + 4),
+                         (strip_left + i * col_w, row_y + H_HR_ROW - 4)],
+                        fill=_hex_to_rgb(BORDER), width=1,
+                    )
+
+                # Hour label
+                lbl = _hour_label(slot.hour)
+                lb  = draw.textbbox((0, 0), lbl, font=f_hr_time)
+                draw.text((cx - (lb[2] - lb[0]) // 2, row_y + 5),
+                          lbl, font=f_hr_time, fill=TEXT_MUT)
+
+                # Temperature
+                temp_str = f"{slot.temperature_f:.0f}\u00b0"
+                tb = draw.textbbox((0, 0), temp_str, font=f_hr_temp)
+                draw.text((cx - (tb[2] - tb[0]) // 2, row_y + 25),
+                          temp_str, font=f_hr_temp, fill=AMBER)
+
+                # Wind speed
+                wind_str = f"{slot.wind_speed_mph:.0f}mph"
+                wb = draw.textbbox((0, 0), wind_str, font=f_hr_wind)
+                draw.text((cx - (wb[2] - wb[0]) // 2, row_y + 51),
+                          wind_str, font=f_hr_wind, fill=TEXT_MUT)
+
+                # Precip probability bar (bottom-up)
+                pct        = slot.precipitation_probability_pct
+                bar_max_h  = 22
+                bar_w      = max(6, col_w - 16)
+                bar_bot    = row_y + H_HR_ROW - 16
+                bar_top_bg = bar_bot - bar_max_h
+                bx1 = cx - bar_w // 2
+                bx2 = cx + bar_w // 2
+                draw.rounded_rectangle([(bx1, bar_top_bg), (bx2, bar_bot)],
+                                        radius=3, fill=_hex_to_rgb(SEP))
+                fill_h = int(bar_max_h * min(pct, 100.0) / 100.0)
+                if fill_h >= 2:
+                    draw.rounded_rectangle(
+                        [(bx1, bar_bot - fill_h), (bx2, bar_bot)],
+                        radius=3, fill=_hex_to_rgb(BLUE))
+
+                # Precip % label
+                pct_str = f"{pct:.0f}%"
+                pb = draw.textbbox((0, 0), pct_str, font=f_hr_pct)
+                draw.text((cx - (pb[2] - pb[0]) // 2, bar_bot + 2),
+                          pct_str, font=f_hr_pct, fill=TEXT_MUT)
+
+        _draw_hourly_row(hourly_slots[:6], y)
+        # Separator between the two rows
+        row2_y = y + H_HR_ROW + H_HR_GAP
+        draw.line(
+            [(strip_left, row2_y - H_HR_GAP // 2),
+             (strip_left + 6 * col_w, row2_y - H_HR_GAP // 2)],
+            fill=_hex_to_rgb(SEP), width=1,
+        )
+        _draw_hourly_row(hourly_slots[6:], row2_y)
+
+        y += H_HR
+
+        # --- Divider ---
+        draw.line([(MARGIN, y + 3), (W - MARGIN, y + 3)], fill=_hex_to_rgb(SEP), width=1)
+        y += H_DIV
+
+        # --- 7-day daily section ---
+        today = date.today()
+        f_day_name  = _font_mono(15, medium=True)
+        f_day_desc  = _font_mono(14)
+        f_day_hilo  = _font_mono(15, medium=True)
+        f_day_pct   = _font_mono(14)
+        f_day_wind  = _font_mono(14)
+
+        # Column left-edge positions (card is sized to fit, so left offset = MARGIN)
+        _day_left = MARGIN
+
+        draw.text((_day_left, y + 8), "7-DAY FORECAST", font=f_hr_lbl, fill=TEXT_MUT)
+        y += H_DAY_LBL
+
+        C_DAY  = _day_left
+        C_DESC = _day_left + _W_DAY  + _GAP
+        C_HILO = _day_left + _W_DAY  + _GAP + _W_DESC + _GAP
+        C_PREC = _day_left + _W_DAY  + _GAP + _W_DESC + _GAP + _W_HILO + _GAP
+        C_WIND = _day_left + _W_DAY  + _GAP + _W_DESC + _GAP + _W_HILO + _GAP + _W_PREC + _GAP
+
+        for i, slot in enumerate(report.daily_forecast.slots[:7]):
+            ry  = y + i * H_DAY_ROW
+            rym = ry + H_DAY_ROW // 2
+
+            if i > 0:
+                draw.line([(_day_left, ry), (_day_left + _day_total, ry)],
+                           fill=_hex_to_rgb(SEP), width=1)
+
+            # Highlight today
+            if slot.date.date() == today:
+                draw.rectangle([(_day_left - 8, ry), (_day_left + _day_total + 8, ry + H_DAY_ROW)],
+                                fill=_hex_to_rgb(PANEL_L))
+                if i > 0:
+                    draw.line([(_day_left, ry), (_day_left + _day_total, ry)],
+                               fill=_hex_to_rgb(SEP), width=1)
+
+            # Day name
+            if slot.date.date() == today:
+                day_lbl   = "TODAY"
+                day_color = AMBER
+            else:
+                day_lbl   = slot.date.strftime("%a").upper()
+                day_color = TEXT_PRI
+
+            db = draw.textbbox((0, 0), day_lbl, font=f_day_name)
+            draw.text((C_DAY, rym - (db[3] - db[1]) // 2),
+                      day_lbl, font=f_day_name, fill=day_color)
+
+            # Weather description (truncate to fit column)
+            desc = slot.weather_description
+            while desc:
+                bb = draw.textbbox((0, 0), desc, font=f_day_desc)
+                if bb[2] - bb[0] <= _W_DESC - 4:
+                    break
+                desc = desc[:-1]
+            if desc != slot.weather_description:
+                desc = desc[:-1] + ".."
+            db2 = draw.textbbox((0, 0), desc, font=f_day_desc)
+            draw.text((C_DESC, rym - (db2[3] - db2[1]) // 2),
+                      desc, font=f_day_desc, fill=TEXT_MUT)
+
+            # Hi / Lo
+            hilo_str = f"Hi {slot.temp_max_f:.0f}  Lo {slot.temp_min_f:.0f}"
+            hb = draw.textbbox((0, 0), hilo_str, font=f_day_hilo)
+            draw.text((C_HILO, rym - (hb[3] - hb[1]) // 2),
+                      hilo_str, font=f_day_hilo, fill=AMBER)
+
+            # Precip %
+            pct_str = f"{slot.precipitation_probability_max_pct:.0f}%"
+            pb = draw.textbbox((0, 0), pct_str, font=f_day_pct)
+            draw.text((C_PREC, rym - (pb[3] - pb[1]) // 2),
+                      pct_str, font=f_day_pct, fill=TEXT_SKY)
+
+            # Max wind
+            wind_str = f"{slot.wind_speed_max_mph:.0f} mph"
+            wbb = draw.textbbox((0, 0), wind_str, font=f_day_wind)
+            draw.text((C_WIND, rym - (wbb[3] - wbb[1]) // 2),
+                      wind_str, font=f_day_wind, fill=TEXT_MUT)
+
+        y += H_DAY
+
+        # --- Historical section ---
+        if has_hist:
+            draw.line([(MARGIN, y + 3), (W - MARGIN, y + 3)],
+                       fill=_hex_to_rgb(SEP), width=1)
+            y += H_DIV
+            draw.text((MARGIN, y + 8), "HISTORICAL", font=f_hr_lbl, fill=TEXT_MUT)
+            y += H_HIST_LBL
+
+            f_h_hdr = _font_mono(14, medium=True)
+            f_h_val = _font_mono(14)
+
+            def _hist_block(rec: DailyHistoricalRecord, header: str, y0: int) -> int:
+                draw.text((MARGIN, y0), header, font=f_h_hdr, fill=TEXT_SKY)
+                y0 += 22
+                draw.text(
+                    (MARGIN, y0),
+                    f"Hi {rec.temp_max_f:.0f}F ({rec.temp_max_c:.0f}C)  /  "
+                    f"Lo {rec.temp_min_f:.0f}F ({rec.temp_min_c:.0f}C)  |  "
+                    f"Precip {rec.precipitation_in:.2f}in  |  "
+                    f"Wind {rec.wind_speed_max_mph:.0f}mph",
+                    font=f_h_val, fill=TEXT_PRI,
+                )
+                return y0 + (H_HIST_BLK - 22)
+
+            if has_year_ago:
+                d = hist.year_ago.date
+                y = _hist_block(hist.year_ago,
+                                f"Last year  ({d.strftime('%b')} {d.day}, {d.year})", y)
+
+            if has_ten_yr:
+                d = hist.ten_year_avg.date
+                y = _hist_block(hist.ten_year_avg,
+                                f"10-yr avg  ({d.strftime('%b')} {d.day} +/-7d)", y)
+
+        # --- Footer ---
+        f_foot  = _font_mono(12)
+        footer  = "ZipWx  |  Open-Meteo"
+        fb      = draw.textbbox((0, 0), footer, font=f_foot)
+        draw.text((W - (fb[2] - fb[0]) - MARGIN, H - H_FOOT + 10),
+                  footer, font=f_foot, fill=TEXT_MUT)
 
         return _to_png(img)
-
-    # ------------------------------------------------------------------
-    # Chart — Forecast (matplotlib dual-axis)
-    # ------------------------------------------------------------------
-
-    def _render_forecast_chart(self, report: WeatherReport) -> bytes:
-        slots = report.forecast.next_n_hours(6)
-        loc   = report.location.display_name
-
-        hours  = [_hour_label(s.hour) for s in slots]
-        temps  = [s.temperature_f for s in slots]
-        precip = [s.precipitation_probability_pct for s in slots]
-        rh     = [s.humidity_pct for s in slots]
-        winds  = [s.wind_speed_mph for s in slots]
-        xs     = range(len(hours))
-
-        GREEN  = "#34d399"   # RH line
-        PURPLE = "#a78bfa"   # wind line
-
-        fig, (ax_t, ax_p, ax_rh, ax_w) = plt.subplots(
-            4, 1,
-            sharex=True,
-            figsize=(10, 7),
-            dpi=90,
-            layout="constrained",
-            gridspec_kw={"height_ratios": [2, 1, 1, 1]},
-        )
-        fig.patch.set_facecolor(BG)
-
-        def _style_ax(ax, y_color):
-            ax.set_facecolor(HEADER_BG)
-            for spine in ax.spines.values():
-                spine.set_edgecolor(ACCENT)
-            ax.tick_params(axis="y", colors=y_color, labelsize=10)
-            ax.grid(axis="y", color=ACCENT, linestyle="--", linewidth=0.7, alpha=0.5)
-
-        # --- Panel 1: Temperature ---
-        _style_ax(ax_t, TEXT_AMB)
-        ax_t.plot(xs, temps, color=TEXT_AMB, linewidth=2.5,
-                  marker="o", markersize=7, zorder=3)
-        ax_t.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
-        ax_t.set_ylabel("Temp (°F)", color=TEXT_AMB, fontsize=10)
-        ax_t.set_title(f"6-Hour Forecast  —  {loc}", color=TEXT_PRI, fontsize=13, pad=8)
-        for x, y in zip(xs, temps):
-            ax_t.annotate(f"{y:.0f}", (x, y), textcoords="offset points",
-                          xytext=(0, 9), ha="center", color=TEXT_AMB, fontsize=10,
-                          fontweight="bold")
-
-        # --- Panel 2: Precip probability ---
-        _style_ax(ax_p, TEXT_SKY)
-        ax_p.bar(xs, precip, color=TEXT_SKY, alpha=0.75, width=0.6, zorder=3)
-        ax_p.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
-        ax_p.set_ylabel("Precip %", color=TEXT_SKY, fontsize=10)
-        ax_p.set_ylim(0, 100)
-        for x, p in zip(xs, precip):
-            if p >= 5:
-                ax_p.text(x, p + 2, f"{p:.0f}%", ha="center", va="bottom",
-                          color=TEXT_SKY, fontsize=9, fontweight="bold")
-
-        # --- Panel 3: Relative Humidity ---
-        _style_ax(ax_rh, GREEN)
-        ax_rh.plot(xs, rh, color=GREEN, linewidth=2, marker="s", markersize=5, zorder=3)
-        ax_rh.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
-        ax_rh.set_ylabel("RH %", color=GREEN, fontsize=10)
-        ax_rh.set_ylim(0, 100)
-
-        # --- Panel 4: Wind speed ---
-        _style_ax(ax_w, PURPLE)
-        ax_w.plot(xs, winds, color=PURPLE, linewidth=2, marker="^", markersize=5, zorder=3)
-        ax_w.tick_params(axis="x", colors=TEXT_PRI, labelsize=11)
-        ax_w.set_ylabel("Wind\n(mph)", color=PURPLE, fontsize=10)
-        ax_w.set_xticks(list(xs))
-        ax_w.set_xticklabels(hours)
-
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", facecolor=fig.get_facecolor())
-        plt.close(fig)
-        buf.seek(0)
-        return buf.read()
 
     # ------------------------------------------------------------------
     # Caption and alt texts
@@ -673,8 +845,5 @@ class WeatherImageFormatter:
             f"{c.temperature_f:.0f}F, {c.weather_description}"
         )
 
-    def _alt_forecast(self, report: WeatherReport) -> str:
-        return f"6-hour temperature and precipitation forecast for {report.location.display_name}"
-
-    def _alt_historical(self, report: WeatherReport) -> str:
-        return f"Historical weather comparison for {report.location.display_name}"
+    def _alt_forecast_card(self, report: WeatherReport) -> str:
+        return f"12-hour and 7-day forecast for {report.location.display_name}"

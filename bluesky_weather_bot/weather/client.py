@@ -26,6 +26,8 @@ from bluesky_weather_bot.weather.models import (
     CurrentConditions,
     HourlyForecastSlot,
     Forecast,
+    DailyForecastSlot,
+    DailyForecast,
     DailyHistoricalRecord,
     HistoricalComparison,
     ResolvedLocation,
@@ -53,6 +55,12 @@ DAILY_VARS = (
     "precipitation_sum,wind_speed_10m_max"
 )
 
+DAILY_FORECAST_VARS = (
+    "weather_code,temperature_2m_max,temperature_2m_min,"
+    "precipitation_sum,precipitation_probability_max,"
+    "wind_speed_10m_max,sunrise,sunset"
+)
+
 
 class WeatherClient:
     """Fetches weather data from Open-Meteo and returns a WeatherReport."""
@@ -72,6 +80,9 @@ class WeatherClient:
         """
         data = self._fetch_current_and_hourly(lat, lon, timezone)
 
+        # Rename daily forecast key before potentially overwriting with archive daily data
+        data["daily_forecast"] = data.pop("daily", {})
+
         if not skip_historical:
             daily_data = self._fetch_daily(lat, lon, timezone)
             data["daily"] = daily_data.get("daily", {})
@@ -84,6 +95,7 @@ class WeatherClient:
             current=self._parse_current(data),
             forecast=self._parse_forecast(data),
             historical=self._parse_historical(data, skip_historical),
+            daily_forecast=self._parse_daily_forecast(data),
         )
 
     # ------------------------------------------------------------------
@@ -96,11 +108,13 @@ class WeatherClient:
             "longitude": lon,
             "current": CURRENT_VARS,
             "hourly": HOURLY_VARS,
+            "daily": DAILY_FORECAST_VARS,
             "temperature_unit": "fahrenheit",
             "wind_speed_unit": "mph",
             "precipitation_unit": "inch",
             "timezone": timezone,
-            "forecast_hours": 6,
+            "forecast_hours": 12,
+            "forecast_days": 7,
         }
         return self._get(params)
 
@@ -276,6 +290,43 @@ class WeatherClient:
             )
 
         return HistoricalComparison(year_ago=year_ago_record, ten_year_avg=ten_year_avg)
+
+    def _parse_daily_forecast(self, data: dict) -> DailyForecast:
+        df = data.get("daily_forecast", {})
+        times    = df.get("time", [])
+        codes    = df.get("weather_code", [])
+        max_t    = df.get("temperature_2m_max", [])
+        min_t    = df.get("temperature_2m_min", [])
+        precips  = df.get("precipitation_sum", [])
+        prec_pct = df.get("precipitation_probability_max", [])
+        winds    = df.get("wind_speed_10m_max", [])
+        sunrises = df.get("sunrise", [])
+        sunsets  = df.get("sunset", [])
+
+        slots = []
+        for i, t in enumerate(times):
+            max_f    = _f(_at(max_t, i))
+            min_f    = _f(_at(min_t, i))
+            prec_in  = _f(_at(precips, i))
+            wind_mph = _f(_at(winds, i))
+            sr_raw   = _at(sunrises, i)
+            ss_raw   = _at(sunsets, i)
+            slots.append(DailyForecastSlot(
+                date=datetime.fromisoformat(t),
+                temp_max_f=max_f,
+                temp_max_c=_f_to_c(max_f),
+                temp_min_f=min_f,
+                temp_min_c=_f_to_c(min_f),
+                precipitation_probability_max_pct=_f(_at(prec_pct, i)),
+                precipitation_in=prec_in,
+                precipitation_mm=_in_to_mm(prec_in),
+                wind_speed_max_mph=wind_mph,
+                wind_speed_max_kph=_mph_to_kph(wind_mph),
+                weather_description=wmo_description(int(_at(codes, i) or 0)),
+                sunrise=datetime.fromisoformat(sr_raw) if sr_raw else None,
+                sunset=datetime.fromisoformat(ss_raw) if ss_raw else None,
+            ))
+        return DailyForecast(slots=slots)
 
 
 # ---------------------------------------------------------------------------

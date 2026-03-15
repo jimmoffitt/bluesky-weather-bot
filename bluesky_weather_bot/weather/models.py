@@ -70,6 +70,30 @@ class Forecast:
 
 
 @dataclass
+class DailyForecastSlot:
+    """One calendar day of forecast data."""
+    date: datetime
+    temp_max_f: float
+    temp_max_c: float
+    temp_min_f: float
+    temp_min_c: float
+    precipitation_probability_max_pct: float
+    precipitation_in: float
+    precipitation_mm: float
+    wind_speed_max_mph: float
+    wind_speed_max_kph: float
+    weather_description: str
+    sunrise: Optional[datetime] = None
+    sunset: Optional[datetime] = None
+
+
+@dataclass
+class DailyForecast:
+    """7-day daily forecast."""
+    slots: list[DailyForecastSlot] = field(default_factory=list)
+
+
+@dataclass
 class DailyHistoricalRecord:
     date: datetime
     temp_max_f: float
@@ -98,6 +122,7 @@ class WeatherReport:
     current: CurrentConditions
     forecast: Forecast
     historical: HistoricalComparison
+    daily_forecast: DailyForecast = field(default_factory=DailyForecast)
     generated_at: datetime = field(default_factory=datetime.utcnow)
 
 

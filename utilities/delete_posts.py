@@ -23,6 +23,9 @@ Usage examples:
   # Delete without confirmation (CI / non-interactive)
   python3 scripts/delete_posts.py --match "ZipWx Integration test" --delete --yes
 
+  # Delete posts matching multiple terms (AND logic) — e.g. old-format ZipWx posts
+  python3 scripts/delete_posts.py --match "#ZipWx" --match "Wx" --replies --delete
+
   # Use explicit credentials instead of .local.env
   python3 scripts/delete_posts.py --handle zipwx.bsky.social --password "xxxx-xxxx" \\
       --match "ZipWx Integration test" --delete
@@ -145,8 +148,9 @@ def main() -> None:
     parser.add_argument("--handle",   help="Bluesky handle (overrides .local.env)")
     parser.add_argument("--password", help="App password  (overrides .local.env)")
     parser.add_argument(
-        "--match", required=True, metavar="TEXT",
-        help="Only delete posts whose text contains this string (case-insensitive)",
+        "--match", required=True, metavar="TEXT", action="append",
+        help="Only delete posts whose text contains this string (case-insensitive). "
+             "Repeat to require multiple matches (AND logic).",
     )
     parser.add_argument(
         "--replies", action="store_true",
@@ -180,7 +184,7 @@ def main() -> None:
               file=sys.stderr)
         sys.exit(1)
 
-    match_text = args.match.lower()
+    match_texts = [m.lower() for m in args.match]
 
     print(f"Logging in as {handle} ...")
     client = _login(handle, password)
@@ -193,16 +197,18 @@ def main() -> None:
     print(f"Fetched {len(all_posts)} post(s) from feed.")
 
     # --- Filter ---
-    matching = [p for p in all_posts if match_text in _post_text(p).lower()]
+    matching = [p for p in all_posts if all(m in _post_text(p).lower() for m in match_texts)]
     matching = matching[: args.limit]
 
+    match_label = " AND ".join(repr(m) for m in args.match)
+
     if not matching:
-        print(f"\nNo posts found containing {args.match!r}. Nothing to do.")
+        print(f"\nNo posts found matching {match_label}. Nothing to do.")
         return
 
     # --- Preview ---
     mode = "DRY RUN" if not args.delete else "TO DELETE"
-    print(f"\n{mode} — {len(matching)} post(s) matching {args.match!r}:\n")
+    print(f"\n{mode} — {len(matching)} post(s) matching {match_label}:\n")
     for i, post in enumerate(matching, 1):
         ts   = _post_created_at(post)[:19].replace("T", " ")
         text = _post_text(post).replace("\n", " ")[:120]
