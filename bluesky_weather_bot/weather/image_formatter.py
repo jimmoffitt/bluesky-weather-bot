@@ -633,6 +633,8 @@ class WeatherImageFormatter:
 
         img, draw = _new_card(W, H)
         loc = report.location.display_name
+        if report.location.zip_code:
+            loc = f"{loc} ({report.location.zip_code})"
 
         # --- Header ---
         ts     = report.current.timestamp
