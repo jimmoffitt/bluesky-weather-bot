@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import threading
 from datetime import datetime, date
 from typing import Optional
 
@@ -118,10 +117,14 @@ class WeatherService:
     def _attach_this_day_history(self, report: WeatherReport, loc: ResolvedLocation) -> None:
         """
         Attach 'this day in history' records to report.this_day_history.
-        Served from cache when available; otherwise fetched in a background
-        thread so the bot response is never delayed.
+        Served from cache when available (fast); otherwise fetched synchronously
+        on first request for this location (~2-3s one-time cost, then cached
+        for the rest of the year).
         """
-        today  = date.today()
+        if self._skip_historical:
+            return
+
+        today      = date.today()
         month, day = today.month, today.day
 
         cached = self._db.get_this_day_history(loc.lat, loc.lon, month, day)
@@ -129,22 +132,20 @@ class WeatherService:
             report.this_day_history = _dicts_to_history(cached)
             return
 
-        # Cache miss — launch background fetch; this request won't have the data
-        def _fetch():
-            try:
-                records = self._client.fetch_this_day_history(
-                    loc.lat, loc.lon, loc.timezone, month, day
-                )
-                serialized = [_history_record_to_dict(r) for r in records]
-                self._db.save_this_day_history(loc.lat, loc.lon, month, day, serialized)
-                logger.info(
-                    "This-day history fetched for %s (%d years)",
-                    loc.display_name, len(records),
-                )
-            except Exception:
-                logger.exception("Background this-day history fetch failed for %s", loc.display_name)
-
-        threading.Thread(target=_fetch, daemon=True).start()
+        # Cache miss — fetch synchronously (once per location per year)
+        try:
+            records = self._client.fetch_this_day_history(
+                loc.lat, loc.lon, loc.timezone, month, day
+            )
+            serialized = [_history_record_to_dict(r) for r in records]
+            self._db.save_this_day_history(loc.lat, loc.lon, month, day, serialized)
+            report.this_day_history = records
+            logger.info(
+                "This-day history fetched for %s (%d years)",
+                loc.display_name, len(records),
+            )
+        except Exception:
+            logger.exception("This-day history fetch failed for %s", loc.display_name)
 
 
 # ---------------------------------------------------------------------------
