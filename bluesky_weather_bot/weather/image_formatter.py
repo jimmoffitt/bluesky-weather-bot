@@ -856,6 +856,8 @@ class WeatherImageFormatter:
         import re
         c   = report.current
         loc = report.location.display_name
+        if report.location.zip_code:
+            loc = f"{loc} ({report.location.zip_code})"
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
         tags = ""
         m = re.search(r',\s*([A-Z]{2})\b', loc)
