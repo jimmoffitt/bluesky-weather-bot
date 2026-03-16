@@ -646,16 +646,16 @@ class WeatherImageFormatter:
         y = H_HDR
 
         # --- Hourly strip ---
-        f_hr_lbl     = _font_mono(17)
+        f_hr_lbl     = _font_mono(19)
         hourly_slots = report.forecast.slots[:12]
 
         draw.text((strip_left, y + 8), "NEXT 12 HOURS", font=f_hr_lbl, fill=TEXT_MUT)
         y += H_HR_LBL
 
-        f_hr_time  = _font_mono(14)
-        f_hr_temp  = _font_syne(18)
-        f_hr_wind  = _font_mono(13)
-        f_hr_pct   = _font_mono(12)
+        f_hr_time  = _font_mono(15)
+        f_hr_temp  = _font_syne(20)
+        f_hr_wind  = _font_mono(14)
+        f_hr_pct   = _font_mono(13)
 
         def _draw_hourly_row(slots_row, row_y):
             for i, slot in enumerate(slots_row):
@@ -726,11 +726,11 @@ class WeatherImageFormatter:
 
         # --- 7-day daily section ---
         today = date.today()
-        f_day_name  = _font_mono(15, medium=True)
-        f_day_desc  = _font_mono(14)
-        f_day_hilo  = _font_mono(15, medium=True)
-        f_day_pct   = _font_mono(14)
-        f_day_wind  = _font_mono(14)
+        f_day_name  = _font_mono(17, medium=True)
+        f_day_desc  = _font_mono(15)
+        f_day_hilo  = _font_mono(17, medium=True)
+        f_day_pct   = _font_mono(15)
+        f_day_wind  = _font_mono(15)
 
         # Column left-edge positions (card is sized to fit, so left offset = MARGIN)
         _day_left = MARGIN
@@ -813,8 +813,8 @@ class WeatherImageFormatter:
             draw.text((MARGIN, y + 8), "HISTORICAL", font=f_hr_lbl, fill=TEXT_MUT)
             y += H_HIST_LBL
 
-            f_h_hdr = _font_mono(14, medium=True)
-            f_h_val = _font_mono(14)
+            f_h_hdr = _font_mono(15, medium=True)
+            f_h_val = _font_mono(15)
 
             def _hist_block(rec: DailyHistoricalRecord, header: str, y0: int) -> int:
                 draw.text((MARGIN, y0), header, font=f_h_hdr, fill=TEXT_SKY)
@@ -840,7 +840,7 @@ class WeatherImageFormatter:
                                 f"10-yr avg  ({d.strftime('%b')} {d.day} +/-7d)", y)
 
         # --- Footer ---
-        f_foot  = _font_mono(12)
+        f_foot  = _font_mono(13)
         footer  = "ZipWx  |  Open-Meteo"
         fb      = draw.textbbox((0, 0), footer, font=f_foot)
         draw.text((W - (fb[2] - fb[0]) - MARGIN, H - H_FOOT + 10),
