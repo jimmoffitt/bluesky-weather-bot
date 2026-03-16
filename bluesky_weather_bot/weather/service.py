@@ -90,8 +90,9 @@ class WeatherService:
             if cached is not None:
                 logger.debug("Cache hit: %s", loc.display_name)
                 report = _dict_to_report(cached)
-                # Refresh display_name from resolver in case cache was seeded by coords only
+                # Refresh display_name and zip_code from resolver in case cache was seeded by coords only
                 report.location.display_name = loc.display_name
+                report.location.zip_code = loc.zip_code
             else:
                 logger.debug("Cache miss: %s — fetching from Open-Meteo", loc.display_name)
                 report = self._client.fetch(
@@ -124,6 +125,7 @@ def _loc_without_candidates(loc: ResolvedLocation) -> ResolvedLocation:
         lon=loc.lon,
         display_name=loc.display_name,
         timezone=loc.timezone,
+        zip_code=loc.zip_code,
         input_was_ambiguous=loc.input_was_ambiguous,
         candidates=[],
     )
@@ -154,6 +156,7 @@ def _report_to_dict(report: WeatherReport) -> dict:
             "lon": loc.lon,
             "display_name": loc.display_name,
             "timezone": loc.timezone,
+            "zip_code": loc.zip_code,
             "input_was_ambiguous": loc.input_was_ambiguous,
             "candidates": [],
         },
@@ -189,6 +192,7 @@ def _dict_to_report(d: dict) -> WeatherReport:
         lon=loc_d["lon"],
         display_name=loc_d["display_name"],
         timezone=loc_d["timezone"],
+        zip_code=loc_d.get("zip_code"),
         input_was_ambiguous=loc_d.get("input_was_ambiguous", False),
         candidates=[],
     )
