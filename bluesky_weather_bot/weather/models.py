@@ -123,6 +123,7 @@ class WeatherReport:
     forecast: Forecast
     historical: HistoricalComparison
     daily_forecast: DailyForecast = field(default_factory=DailyForecast)
+    this_day_history: list[DailyHistoricalRecord] = field(default_factory=list)
     generated_at: datetime = field(default_factory=datetime.utcnow)
 
 

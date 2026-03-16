@@ -233,6 +233,18 @@ class Database:
                 ON weather_cache(expires_at);
 
             -- --------------------------------------------------------
+            -- this_day_history_cache: ERA5 "on this day" yearly records
+            -- Keyed by lat/lon/month/day; refreshed once per year.
+            -- --------------------------------------------------------
+            CREATE TABLE IF NOT EXISTS this_day_history_cache (
+                cache_key   TEXT    PRIMARY KEY,
+                -- '{lat:.2f}:{lon:.2f}:{MM:02d}-{DD:02d}'
+                data_json   TEXT    NOT NULL,
+                fetched_at  TEXT    NOT NULL,
+                expires_at  TEXT    NOT NULL
+            );
+
+            -- --------------------------------------------------------
             -- seen_dm_ids: DM messages already processed (kept forever)
             -- --------------------------------------------------------
             CREATE TABLE IF NOT EXISTS seen_dm_ids (
@@ -645,6 +657,40 @@ class Database:
         )
         self._conn.commit()
         return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # this_day_history_cache
+    # ------------------------------------------------------------------
+
+    def get_this_day_history(self, lat: float, lon: float, month: int, day: int) -> Optional[list]:
+        assert self._conn
+        key = f"{lat:.2f}:{lon:.2f}:{month:02d}-{day:02d}"
+        row = self._conn.execute(
+            "SELECT data_json FROM this_day_history_cache WHERE cache_key=? AND expires_at > ?",
+            (key, _now()),
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_this_day_history(
+        self, lat: float, lon: float, month: int, day: int, records: list
+    ) -> None:
+        assert self._conn
+        key      = f"{lat:.2f}:{lon:.2f}:{month:02d}-{day:02d}"
+        now_dt   = datetime.utcnow()
+        # Refresh once per year — expire on Jan 15 next year
+        expires  = datetime(now_dt.year + 1, 1, 15).isoformat()
+        self._conn.execute(
+            """
+            INSERT INTO this_day_history_cache (cache_key, data_json, fetched_at, expires_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                data_json  = excluded.data_json,
+                fetched_at = excluded.fetched_at,
+                expires_at = excluded.expires_at
+            """,
+            (key, json.dumps(records), now_dt.isoformat(), expires),
+        )
+        self._conn.commit()
 
     # ------------------------------------------------------------------
     # seen_dm_ids

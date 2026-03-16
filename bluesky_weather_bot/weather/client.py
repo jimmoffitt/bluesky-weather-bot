@@ -328,6 +328,82 @@ class WeatherClient:
             ))
         return DailyForecast(slots=slots)
 
+    # ------------------------------------------------------------------
+    # "This day in history" — ERA5 fetch across all available years
+    # ------------------------------------------------------------------
+
+    def fetch_this_day_history(
+        self,
+        lat: float,
+        lon: float,
+        timezone: str,
+        month: int,
+        day: int,
+        start_year: int = 1950,
+    ) -> list[DailyHistoricalRecord]:
+        """
+        Fetch ERA5 daily data from start_year to last year, then filter to
+        entries matching (month, day). Returns one DailyHistoricalRecord per
+        year that has data for that date.
+
+        One API call returns the full date range; client-side filtering keeps
+        only matching MM-DD rows (~75 data points for 75 years).
+        """
+        today = date.today()
+        start = date(start_year, month, day)
+        # end = yesterday to ensure complete daily data
+        end   = date(today.year - 1, 12, 31)
+        if end < start:
+            return []
+
+        params = {
+            "latitude":           lat,
+            "longitude":          lon,
+            "start_date":         start.isoformat(),
+            "end_date":           end.isoformat(),
+            "daily":              "temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max",
+            "temperature_unit":   "fahrenheit",
+            "wind_speed_unit":    "mph",
+            "precipitation_unit": "inch",
+            "timezone":           timezone,
+        }
+        try:
+            data   = self._get_archive(params)
+        except Exception as e:
+            logger.warning("fetch_this_day_history failed: %s", e)
+            return []
+
+        daily   = data.get("daily", {})
+        times   = daily.get("time", [])
+        max_t   = daily.get("temperature_2m_max", [])
+        min_t   = daily.get("temperature_2m_min", [])
+        precips = daily.get("precipitation_sum", [])
+        winds   = daily.get("wind_speed_10m_max", [])
+
+        records: list[DailyHistoricalRecord] = []
+        for i, t in enumerate(times):
+            d = date.fromisoformat(t)
+            if d.month != month or d.day != day:
+                continue
+            max_f    = _f(_at(max_t, i))
+            min_f    = _f(_at(min_t, i))
+            prec_in  = _f(_at(precips, i))
+            wind_mph = _f(_at(winds, i))
+            records.append(DailyHistoricalRecord(
+                date=datetime.combine(d, datetime.min.time()),
+                temp_max_f=max_f,
+                temp_max_c=_f_to_c(max_f),
+                temp_min_f=min_f,
+                temp_min_c=_f_to_c(min_f),
+                temp_mean_f=(max_f + min_f) / 2,
+                temp_mean_c=_f_to_c((max_f + min_f) / 2),
+                precipitation_in=prec_in,
+                precipitation_mm=_in_to_mm(prec_in),
+                wind_speed_max_mph=wind_mph,
+                wind_speed_max_kph=_mph_to_kph(wind_mph),
+            ))
+        return records
+
 
 # ---------------------------------------------------------------------------
 # Unit conversion helpers

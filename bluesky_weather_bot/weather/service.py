@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from datetime import datetime
+import threading
+from datetime import datetime, date
 from typing import Optional
 
 from bluesky_weather_bot.storage.db import Database
@@ -109,9 +110,41 @@ class WeatherService:
                     report_json=_report_to_dict(report),
                 )
 
+            self._attach_this_day_history(report, loc)
             results.append(report)
 
         return results
+
+    def _attach_this_day_history(self, report: WeatherReport, loc: ResolvedLocation) -> None:
+        """
+        Attach 'this day in history' records to report.this_day_history.
+        Served from cache when available; otherwise fetched in a background
+        thread so the bot response is never delayed.
+        """
+        today  = date.today()
+        month, day = today.month, today.day
+
+        cached = self._db.get_this_day_history(loc.lat, loc.lon, month, day)
+        if cached is not None:
+            report.this_day_history = _dicts_to_history(cached)
+            return
+
+        # Cache miss — launch background fetch; this request won't have the data
+        def _fetch():
+            try:
+                records = self._client.fetch_this_day_history(
+                    loc.lat, loc.lon, loc.timezone, month, day
+                )
+                serialized = [_history_record_to_dict(r) for r in records]
+                self._db.save_this_day_history(loc.lat, loc.lon, month, day, serialized)
+                logger.info(
+                    "This-day history fetched for %s (%d years)",
+                    loc.display_name, len(records),
+                )
+            except Exception:
+                logger.exception("Background this-day history fetch failed for %s", loc.display_name)
+
+        threading.Thread(target=_fetch, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +321,23 @@ def _parse_daily_record(r: Optional[dict]) -> Optional[DailyHistoricalRecord]:
         wind_speed_max_mph=r["wind_speed_max_mph"],
         wind_speed_max_kph=r["wind_speed_max_kph"],
     )
+
+
+def _history_record_to_dict(r: DailyHistoricalRecord) -> dict:
+    return {
+        "date":               r.date.isoformat(),
+        "temp_max_f":         r.temp_max_f,
+        "temp_max_c":         r.temp_max_c,
+        "temp_min_f":         r.temp_min_f,
+        "temp_min_c":         r.temp_min_c,
+        "temp_mean_f":        r.temp_mean_f,
+        "temp_mean_c":        r.temp_mean_c,
+        "precipitation_in":   r.precipitation_in,
+        "precipitation_mm":   r.precipitation_mm,
+        "wind_speed_max_mph": r.wind_speed_max_mph,
+        "wind_speed_max_kph": r.wind_speed_max_kph,
+    }
+
+
+def _dicts_to_history(records: list[dict]) -> list[DailyHistoricalRecord]:
+    return [_parse_daily_record(r) for r in records if r is not None]  # type: ignore[misc]

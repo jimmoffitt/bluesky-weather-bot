@@ -311,6 +311,11 @@ class WeatherImageFormatter:
         images.append(card2)
         alts.append(self._alt_forecast_card(report))
 
+        if report.this_day_history:
+            card3 = self._render_this_day_card(report)
+            images.append(card3)
+            alts.append(self._alt_this_day_card(report))
+
         caption = self._caption(report)
         return images, alts, caption
 
@@ -884,3 +889,147 @@ class WeatherImageFormatter:
 
     def _alt_forecast_card(self, report: WeatherReport) -> str:
         return f"12-hour and 7-day forecast for {report.location.display_name}"
+
+    def _alt_this_day_card(self, report: WeatherReport) -> str:
+        today = date.today()
+        n = len(report.this_day_history)
+        return (
+            f"On this day ({today.strftime('%b %d')}) historical temperatures "
+            f"for {report.location.display_name} — {n} years of data"
+        )
+
+    # ------------------------------------------------------------------
+    # Card 3 — "On this day" historical temperature chart
+    # ------------------------------------------------------------------
+
+    def _render_this_day_card(self, report: WeatherReport) -> bytes:
+        records = report.this_day_history
+        if not records:
+            return b""
+
+        MARGIN  = 24
+        W       = 760
+        H_HDR   = 76
+        H_CHART = 300
+        H_STATS = 130
+        H_FOOT  = 32
+        H       = H_HDR + H_CHART + H_STATS + H_FOOT
+
+        img, draw = _new_card(W, H)
+
+        # --- Header ---
+        loc    = report.location.display_name
+        today  = date.today()
+        ts_str = today.strftime("%b %d").upper()
+        self._draw_location_header(draw, W, loc, ts_str, badge_text="ON THIS DAY")
+
+        # --- Chart area bounds ---
+        cx1 = MARGIN + 44   # left edge (room for Y-axis labels)
+        cx2 = W - MARGIN
+        cy1 = H_HDR + 20
+        cy2 = H_HDR + H_CHART - 16
+
+        # --- Compute stats ---
+        years     = [r.date.year for r in records]
+        highs     = [r.temp_max_f for r in records]
+        lows      = [r.temp_min_f for r in records]
+        rec_high  = max(highs)
+        rec_low   = min(lows)
+        rec_high_yr = years[highs.index(rec_high)]
+        rec_low_yr  = years[lows.index(rec_low)]
+        avg_high  = sum(highs) / len(highs)
+        avg_low   = sum(lows)  / len(lows)
+
+        # Y-axis scale: 10°F padding above/below records, rounded to 10s
+        y_min = (int(rec_low  - 10) // 10) * 10
+        y_max = (int(rec_high + 10) // 10) * 10 + 10
+        y_range = y_max - y_min or 1
+
+        def temp_to_y(t: float) -> int:
+            return int(cy2 - (t - y_min) / y_range * (cy2 - cy1))
+
+        # --- Y-axis gridlines + labels ---
+        f_axis = _font_mono(13)
+        step   = 20 if (y_max - y_min) > 80 else 10
+        for t in range(y_min, y_max + 1, step):
+            gy = temp_to_y(t)
+            if cy1 <= gy <= cy2:
+                draw.line([(cx1, gy), (cx2, gy)], fill=_hex_to_rgb(SEP), width=1)
+                lbl = f"{t:+d}°" if t == 0 else f"{t}°"
+                draw.text((MARGIN, gy - 7), lbl, font=f_axis, fill=TEXT_MUT)
+
+        # --- Avg high / avg low reference lines ---
+        avg_hi_y = temp_to_y(avg_high)
+        avg_lo_y = temp_to_y(avg_low)
+        for ay, color in [(avg_hi_y, AMBER), (avg_lo_y, BLUE)]:
+            if cy1 <= ay <= cy2:
+                draw.line([(cx1, ay), (cx2, ay)],
+                          fill=_hex_to_rgb(color), width=1)
+
+        # --- Year bars ---
+        n_years  = len(records)
+        bar_area = cx2 - cx1
+        bar_w    = max(2, bar_area // n_years - 1)
+        gap      = max(1, (bar_area - bar_w * n_years) // max(n_years - 1, 1))
+
+        for i, rec in enumerate(records):
+            bx = cx1 + i * (bar_w + gap)
+            by_hi = temp_to_y(rec.temp_max_f)
+            by_lo = temp_to_y(rec.temp_min_f)
+            by_hi = max(cy1, min(cy2, by_hi))
+            by_lo = max(cy1, min(cy2, by_lo))
+
+            # Colour: record high = AMBER, record low = BLUE, else muted
+            if rec.temp_max_f == rec_high:
+                color = AMBER
+            elif rec.temp_min_f == rec_low:
+                color = BLUE
+            else:
+                color = "#2a3a58"  # subtle bar
+
+            draw.rectangle([(bx, by_hi), (bx + bar_w - 1, by_lo)],
+                            fill=_hex_to_rgb(color))
+
+        # --- X-axis year labels (every 10 years) ---
+        f_yr = _font_mono(12)
+        for rec in records:
+            if rec.date.year % 10 == 0:
+                i   = years.index(rec.date.year)
+                bx  = cx1 + i * (bar_w + gap)
+                draw.text((bx - 4, cy2 + 4), str(rec.date.year),
+                          font=f_yr, fill=TEXT_MUT)
+
+        # --- Stats block ---
+        sy      = H_HDR + H_CHART + 8
+        f_lbl   = _font_mono(14, medium=True)
+        f_val   = _font_syne(18)
+        f_small = _font_mono(13)
+
+        def _stat(x, y, label, value, color=TEXT_PRI):
+            draw.text((x, y),      label, font=f_lbl,  fill=TEXT_MUT)
+            draw.text((x, y + 20), value, font=f_val,  fill=_hex_to_rgb(color))
+
+        col1 = MARGIN
+        col2 = W // 2
+
+        _stat(col1, sy,      "RECORD HIGH", f"{rec_high:.0f}°F  ({rec_high_yr})", AMBER)
+        _stat(col2, sy,      "RECORD LOW",  f"{rec_low:.0f}°F  ({rec_low_yr})",   BLUE)
+        _stat(col1, sy + 56, "AVG HIGH",    f"{avg_high:.0f}°F")
+        _stat(col2, sy + 56, "AVG LOW",     f"{avg_low:.0f}°F")
+
+        # Year span note
+        yr_note = f"{years[0]}–{years[-1]}  ({n_years} years)"
+        draw.text((MARGIN, sy + 100), yr_note, font=f_small, fill=TEXT_MUT)
+
+        # --- Footer ---
+        f_foot = _font_mono(13)
+        footer = "ZipWx  |  Open-Meteo ERA5"
+        fb     = draw.textbbox((0, 0), footer, font=f_foot)
+        draw.text(
+            (W - (fb[2] - fb[0]) - MARGIN, H - H_FOOT + 10),
+            footer, font=f_foot, fill=TEXT_MUT,
+        )
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
