@@ -360,14 +360,17 @@ class WeatherImageFormatter:
         loc_y  = (H_HDR - 3 - loc_h) // 2
         draw.text((16, loc_y), loc, font=f_loc, fill=TEXT_PRI)
 
-        # Timestamp — right-anchored to badge (or right edge)
+        # Timestamp — right-anchored to badge (or right edge); always drawn
         ts_b  = draw.textbbox((0, 0), ts_str, font=f_ts)
         tw, th = ts_b[2] - ts_b[0], ts_b[3] - ts_b[1]
         ts_x  = badge_anchor - tw
         ts_y  = (H_HDR - 3 - th) // 2
         loc_right = 16 + (loc_b[2] - loc_b[0])
-        if ts_x > loc_right + 8:
-            draw.text((ts_x, ts_y), ts_str, font=f_ts, fill=TEXT_MUT)
+        if ts_x < loc_right + 8:
+            # Not enough horizontal room — draw timestamp on a second line
+            ts_x = W - tw - 16
+            ts_y = loc_y + loc_h - th + 4
+        draw.text((ts_x, ts_y), ts_str, font=f_ts, fill=TEXT_MUT)
 
         return H_HDR
 
