@@ -315,6 +315,63 @@ class WeatherImageFormatter:
         return images, alts, caption
 
     # ------------------------------------------------------------------
+    # Shared header — location + timestamp (+ optional badge)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _draw_location_header(
+        draw: ImageDraw.ImageDraw,
+        W: int,
+        loc: str,
+        ts_str: str,
+        badge_text: str = "",
+    ) -> int:
+        """
+        Draw a single-line location + timestamp header bar consistent across all cards.
+        Returns H_HDR (y position of the first content pixel below the header).
+        """
+        H_HDR  = 76
+        f_loc   = _font_syne(24)
+        f_ts    = _font_mono(18)
+        f_badge = _font_syne(17)
+
+        draw.rectangle([(0, 0), (W, H_HDR - 3)], fill=_hex_to_rgb(HDR_BG))
+        draw.rectangle([(0, H_HDR - 3), (W, H_HDR)], fill=_hex_to_rgb(BLUE))
+
+        # Badge (optional) — draw first so timestamp can anchor to its left edge
+        badge_anchor = W - 16   # right edge available for timestamp
+        if badge_text:
+            bbbox      = draw.textbbox((0, 0), badge_text, font=f_badge)
+            bw, bh     = bbbox[2] - bbbox[0], bbbox[3] - bbbox[1]
+            bpx, bpy   = 10, 4
+            bx2        = W - 16
+            bx1        = bx2 - bw - 2 * bpx
+            by1        = (H_HDR - 3 - bh - 2 * bpy) // 2
+            by2        = by1 + bh + 2 * bpy
+            draw.rounded_rectangle([(bx1, by1), (bx2, by2)], radius=100,
+                                    fill=(24, 36, 56), outline=_hex_to_rgb(BLUE), width=1)
+            draw.text((bx1 + bpx, by1 + bpy), badge_text,
+                      font=f_badge, fill=_hex_to_rgb(BLUE))
+            badge_anchor = bx1 - 12
+
+        # Location — left
+        loc_b  = draw.textbbox((0, 0), loc, font=f_loc)
+        loc_h  = loc_b[3] - loc_b[1]
+        loc_y  = (H_HDR - 3 - loc_h) // 2
+        draw.text((16, loc_y), loc, font=f_loc, fill=TEXT_PRI)
+
+        # Timestamp — right-anchored to badge (or right edge)
+        ts_b  = draw.textbbox((0, 0), ts_str, font=f_ts)
+        tw, th = ts_b[2] - ts_b[0], ts_b[3] - ts_b[1]
+        ts_x  = badge_anchor - tw
+        ts_y  = (H_HDR - 3 - th) // 2
+        loc_right = 16 + (loc_b[2] - loc_b[0])
+        if ts_x > loc_right + 8:
+            draw.text((ts_x, ts_y), ts_str, font=f_ts, fill=TEXT_MUT)
+
+        return H_HDR
+
+    # ------------------------------------------------------------------
     # Card 1 — Current conditions  (800 × 500 px)
     # ------------------------------------------------------------------
 
@@ -340,40 +397,9 @@ class WeatherImageFormatter:
         ts_str   = f"{dow} {mon} {day}  \u00b7  {hour12}:{minute} {ampm} {tz}"
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
 
-        # ── Header — badge calculated first so timestamp can anchor to it ─────
-        draw.rectangle([(0, 0), (W, H_HDR)], fill=_hex_to_rgb(HDR_BG))
-        draw.line([(0, H_HDR), (W, H_HDR)], fill=_hex_to_rgb(BORDER), width=1)
-
-        f_loc   = _font_syne(28)
-        f_ts    = _font_mono(24)
-        f_badge = _font_syne(19)
-
-        badge_text = c.weather_description[:24]
-        bbbox      = draw.textbbox((0, 0), badge_text, font=f_badge)
-        bw, bh     = bbbox[2] - bbbox[0], bbbox[3] - bbbox[1]
-        bpx, bpy   = 12, 5
-        bx2        = W - 16
-        bx1        = bx2 - bw - 2 * bpx
-        by1        = (H_HDR - bh - 2 * bpy) // 2
-        by2        = by1 + bh + 2 * bpy
-        draw.rounded_rectangle([(bx1, by1), (bx2, by2)], radius=100,
-                                fill=(24, 36, 56), outline=_hex_to_rgb(BLUE), width=1)
-        draw.text((bx1 + bpx, by1 + bpy), badge_text,
-                  font=f_badge, fill=_hex_to_rgb(BLUE))
-
-        # Location left; timestamp right-anchored to badge — they can never overlap
-        loc_b  = draw.textbbox((0, 0), loc,    font=f_loc)
-        ts_b   = draw.textbbox((0, 0), ts_str, font=f_ts)
-        loc_h  = loc_b[3] - loc_b[1]
-        ts_h   = ts_b[3]  - ts_b[1]
-        row_h  = max(loc_h, ts_h)
-        text_y = (H_HDR - row_h) // 2
-
-        draw.text((20, text_y), loc, font=f_loc, fill=TEXT_PRI)
-        ts_x = bx1 - (ts_b[2] - ts_b[0]) - 16
-        if ts_x > 20 + (loc_b[2] - loc_b[0]) + 8:   # draw only if it fits
-            draw.text((ts_x, text_y + (row_h - ts_h) // 2), ts_str,
-                      font=f_ts, fill=TEXT_MUT)
+        # ── Header ────────────────────────────────────────────────────────────
+        self._draw_location_header(draw, W, loc, ts_str,
+                                   badge_text=c.weather_description[:24])
 
         # ── Temperature block — °F and °C on the same row ─────────────────────
         draw.rectangle([(0, H_HDR), (W, H_HDR + TEMP_H)], fill=_hex_to_rgb(PANEL_L))
@@ -609,18 +635,14 @@ class WeatherImageFormatter:
         loc = report.location.display_name
 
         # --- Header ---
-        ts      = report.current.timestamp
-        tz      = _tz_abbr(report.location.timezone, ts)
-        dow     = ts.strftime("%a").upper()
-        mon     = ts.strftime("%b").upper()
-        hour12  = ts.hour % 12 or 12
-        ampm    = "AM" if ts.hour < 12 else "PM"
-        ts_str  = f"{dow} {mon} {ts.day}  \u00b7  {hour12}:{ts.strftime('%M')} {ampm} {tz}"
+        ts     = report.current.timestamp
+        tz     = _tz_abbr(report.location.timezone, ts)
+        hour12 = ts.hour % 12 or 12
+        ampm   = "AM" if ts.hour < 12 else "PM"
+        ts_str = (f"{ts.strftime('%a').upper()} {ts.strftime('%b').upper()} {ts.day}"
+                  f"  \u00b7  {hour12}:{ts.strftime('%M')} {ampm} {tz}")
 
-        draw.rectangle([(0, 0), (W, 73)], fill=_hex_to_rgb(HDR_BG))
-        _text_centered(draw, 10, loc,    _font_syne(22),   TEXT_PRI, W)
-        _text_centered(draw, 42, ts_str, _font_mono(14),   TEXT_MUT, W)
-        draw.rectangle([(0, 73), (W, 76)], fill=_hex_to_rgb(BLUE))
+        self._draw_location_header(draw, W, loc, ts_str)
         y = H_HDR
 
         # --- Hourly strip ---
