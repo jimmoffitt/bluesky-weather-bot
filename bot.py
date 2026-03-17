@@ -354,13 +354,13 @@ class ZipWx:
 
         elif cmd == "help":
             self._send_dm_reply(request, (
-                "ZipWx commands:\n"
-                "  80501 or Denver, CO — get weather\n"
-                "  set home Denver, CO — save home location\n"
-                "  imperial / metric — set display units\n"
-                "  settings — view your preferences\n"
-                "  reset — clear all preferences\n"
-                "  clear home — remove home location"
+                "ZipWx commands (via DM):\n"
+                "  80501 or Denver, CO  — get weather\n"
+                "  set home Denver, CO  — save home location\n"
+                "  clear home           — remove home location\n"
+                "  imperial / metric    — display units\n"
+                "  settings             — view preferences\n"
+                "  reset                — clear all preferences"
             ))
 
         else:
@@ -378,12 +378,21 @@ class ZipWx:
 
     def _send_help_reply(self, request: AlertRequest) -> None:
         help_text = (
-            "Hi! Mention me with a US zip code or city to get weather.\n"
+            "Mention me with a zip code or city to get weather.\n"
             "Examples:\n"
             "  @zipwx.bsky.social 80501\n"
-            "  @zipwx.bsky.social Denver, CO\n"
-            "  @zipwx.bsky.social Minneapolis"
+            "  @zipwx.bsky.social Denver, CO\n\n"
+            "DM me for personalized weather and to set a home location."
         )
+        images, alts = None, None
+        if self._image_formatter is not None:
+            try:
+                from bluesky_weather_bot.weather.image_formatter import WeatherImageFormatter
+                card = WeatherImageFormatter.render_help_card()
+                images = [card]
+                alts   = ["ZipWx DM command reference card"]
+            except Exception:
+                logger.warning("[bot] Could not render help card", exc_info=True)
         payload = NotificationPayload(
             request_db_id=request.db_id,
             post_thread=[help_text],
@@ -391,6 +400,8 @@ class ZipWx:
             reply_to_cid=request.reply_to_cid,
             recipient_handle=request.requester_handle,
             target_channel=self._route(request),
+            post_images=images,
+            post_image_alts=alts,
         )
         self._deliver(payload)
 
