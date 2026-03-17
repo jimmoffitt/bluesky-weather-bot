@@ -322,7 +322,7 @@ class ZipWx:
                 display = reports[0].location.display_name if reports else raw
                 self._db.set_user_prefs(did, handle=request.requester_handle,
                                         home_raw=raw, home_display=display)
-                self._send_dm_reply(request, f"Home set to {display}. DM me anytime for weather there!")
+                self._send_dm_reply(request, f"Configuration received. Home location set to {display}.")
             except Exception:
                 self._send_dm_reply(request,
                     f"Couldn't find location: {raw!r}. Try a zip code or 'City, ST'.")
@@ -330,32 +330,32 @@ class ZipWx:
         elif cmd == "set_units_imperial":
             self._db.set_user_prefs(did, handle=request.requester_handle, units="imperial")
             self._send_dm_reply(request,
-                "Units set to imperial (°F primary). Both °F and °C will still be shown.")
+                "Configuration received. Showing °F first (°C still included).")
 
         elif cmd == "set_units_metric":
             self._db.set_user_prefs(did, handle=request.requester_handle, units="metric")
             self._send_dm_reply(request,
-                "Units set to metric (°C primary). Both °C and °F will still be shown.")
+                "Configuration received. Showing °C first (°F still included).")
 
         elif cmd == "clear_home":
             if did:
                 self._db.clear_home(did)
-            self._send_dm_reply(request, "Home location cleared.")
+            self._send_dm_reply(request, "Configuration received. Home location cleared.")
 
         elif cmd == "reset_prefs":
             if did:
                 self._db.reset_prefs(did)
-            self._send_dm_reply(request, "Preferences reset to defaults (imperial, no home).")
+            self._send_dm_reply(request, "Configuration received. Preferences reset to defaults (imperial units, phone layout, no home).")
 
         elif cmd == "set_layout_desktop":
             self._db.set_user_prefs(did, handle=request.requester_handle, layout="desktop")
             self._send_dm_reply(request,
-                "Layout set to desktop. Landscape cards optimised for browser viewing.")
+                "Configuration received. Now creating images optimized for a monitor.")
 
         elif cmd == "set_layout_phone":
             self._db.set_user_prefs(did, handle=request.requester_handle, layout="phone")
             self._send_dm_reply(request,
-                "Layout set to phone. Portrait cards optimised for mobile viewing.")
+                "Configuration received. Now creating images optimized for a phone.")
 
         elif cmd == "settings":
             prefs = self._db.get_user_prefs(did) if did else None

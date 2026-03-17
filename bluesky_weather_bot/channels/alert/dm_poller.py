@@ -259,8 +259,11 @@ class DMAlertChannel(AlertChannel):
         if city_m:
             return f"{city_m.group(1).strip()}, {city_m.group(2)}"
 
+        # Bare city name fallback — accept only if no digits present
+        # (zip codes are already caught above; digits here mean an address or
+        # building number, not a city name, e.g. "Desktop Solutions, 6219")
         clean = text.strip()
-        if 3 <= len(clean) <= 50:
+        if 3 <= len(clean) <= 50 and not any(c.isdigit() for c in clean):
             return clean
 
         return None
