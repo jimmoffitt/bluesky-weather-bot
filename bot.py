@@ -192,8 +192,8 @@ class ZipWx:
             self._db.update_request_status(db_id, "complete")
             return
 
-        # Home location fallback for DMs with no explicit location
-        if not request.raw_location and request.source_channel == "dm" and request.requester_did:
+        # Home location fallback for any channel with no explicit location
+        if not request.raw_location and request.requester_did:
             prefs = self._db.get_user_prefs(request.requester_did)
             if prefs and prefs.get("home_raw"):
                 request.raw_location = prefs["home_raw"]
