@@ -6,9 +6,15 @@ or a 3-post text thread — your choice.
 
 ## What it looks like
 
-**Image mode** (`POST_MODE=image`) — a single portrait card posted as a reply:
+**Image mode** (`POST_MODE=image`) — up to 3 PNG cards posted as a reply:
 
-<img src="docs/screenshot_image_card.png" width="300" alt="Weather image card for Denver, CO showing 58°F clear sky with humidity, wind, gusts, precip and pressure stats">
+| Current conditions | Forecast | On This Day |
+|---|---|---|
+| <img src="docs/screenshot_image_card.png" width="220" alt="Current conditions card"> | <img src="docs/screenshot_forecast_card.png" width="220" alt="12-hour and 7-day forecast card"> | <img src="docs/screenshot_historical_card.png" width="220" alt="On this day historical temperature chart"> |
+
+- **Card 1** — current conditions: temp, feels-like, humidity, wind, gusts, pressure, sunrise/sunset
+- **Card 2** — 12-hour hourly + 7-day daily forecast
+- **Card 3** — "On this day" ERA5 temperature history (75 years), record high/low, averages
 
 **Text mode** (`POST_MODE=text`) — a 3-post thread (also used for DM replies):
 
@@ -78,6 +84,8 @@ Users can configure their experience by sending commands directly to the bot via
 Bluesky DM. Changes are stored per-user and apply to all future responses on
 any channel.
 
+<img src="docs/screenshot_help_card.png" width="400" alt="ZipWx DM command reference card">
+
 ### Weather requests
 
 Just send a location — no trigger word needed:
@@ -88,46 +96,39 @@ Denver, CO
 Portland
 ```
 
-If you have a home location saved, send any DM with no location and the bot
-replies with your home weather automatically.
+If you have a home location saved, send a blank DM and the bot replies with
+your home weather automatically.
 
-### Setting a home location
-
-```
-set home Denver, CO
-set home 80501
-set home Portland
-```
-
-The bot validates the location before saving. Once set, a blank DM (or any
-unrecognized message) will return weather for your home location.
-
-To remove it:
+### Home location
 
 ```
-clear home
+set home Denver, CO      ← save by city
+set home 80501           ← save by ZIP
+clear home               ← remove saved location
 ```
+
+The bot validates the location before saving.
 
 ### Display units
 
 Both °F and °C (and mph/km/h, in/mm) are always shown. The units setting
-controls which value appears first and is styled as the primary reading.
+controls which appears first.
 
 | Command | Effect |
 |---------|--------|
-| `imperial` | °F · mph · inches displayed first (default) |
-| `metric` | °C · km/h · mm displayed first |
+| `imperial` | °F · mph · inches first (default) |
+| `metric` | °C · km/h · mm first |
 
-Aliases also accepted: `set units imperial`, `use imperial`, `fahrenheit`,
-`set units metric`, `use metric`, `celsius`.
+Aliases: `use imperial`, `fahrenheit`, `use metric`, `celsius`,
+`set units imperial`, `set units metric`.
 
-### Viewing and resetting preferences
+### Account commands
 
 | Command | Effect |
 |---------|--------|
 | `settings` | Show your current units and home location |
 | `reset` | Clear all preferences and return to defaults |
-| `help` | List all available commands |
+| `help` or `?` | Show the command reference card |
 
 ## Configuration
 
@@ -138,23 +139,27 @@ All settings are loaded from `.local.env` (gitignored). Copy
 |----------|---------|-------------|
 | `BSKY_HANDLE` | *(required)* | Your bot's Bluesky handle |
 | `BSKY_APP_PASSWORD` | *(required)* | App password from Bluesky settings |
-| `POST_MODE` | `text` | `text` for 3-post thread, `image` for portrait PNG card |
-| `SKIP_HISTORICAL` | `false` | Skip archive API calls (faster, no historical data) |
-| `WEATHER_CACHE_TTL_MINUTES` | `30` | How long to cache weather lookups |
-| `DB_PATH` | `data/zipwx.db` | SQLite database path |
+| `POST_MODE` | `text` | `text` — 3-post thread; `image` — up to 3 PNG cards |
+| `SERVER_TYPE` | `laptop` | Shown in latency footer: `laptop` or `Pi` |
+| `SKIP_HISTORICAL` | `false` | Skip archive API calls — faster, useful during development |
+| `WEATHER_CACHE_TTL_MINUTES` | `30` | How long to cache current conditions lookups |
+| `DB_PATH` | `data/zipwx.db` | SQLite database path — point to USB drive on Pi for better I/O |
 | `INBOX_PATH` | `inbox` | Directory watched for YAML alert files |
+| `INBOX_ARCHIVE_PATH` | `inbox/archive` | Processed YAML files moved here |
+| `INBOX_ERROR_PATH` | `inbox/errors` | Unparseable YAML files moved here |
+| `INBOX_POLL_INTERVAL_SEC` | `5.0` | How often to check the inbox directory |
 | `LOG_PATH` | `logs/zipwx.log` | Log file path |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
 
 ### Image mode dependencies
 
-`POST_MODE=image` requires Pillow and matplotlib:
+`POST_MODE=image` requires Pillow:
 
 ```bash
-pip3 install Pillow matplotlib
+pip3 install Pillow
 ```
 
-If either is missing the bot logs a warning and falls back to text mode automatically.
+If Pillow is missing the bot logs a warning and falls back to text mode automatically.
 
 ## Architecture
 
@@ -304,9 +309,10 @@ mentions:
 
 Powered by [Open-Meteo](https://open-meteo.com/) — free, no API key required.
 
-- **Current**: temp, feels-like, humidity, wind, gusts, cloud cover, pressure, visibility
-- **Forecast**: next 6 hours (temp, precip probability, wind, cloud cover)
-- **Historical**: same date last year + 10-year climatological average
+- **Current**: temp, feels-like, humidity, wind, gusts, cloud cover, pressure, visibility, sunrise/sunset
+- **Forecast**: next 12 hours hourly + 7-day daily (temp, precip probability, wind, cloud cover)
+- **Historical comparison**: same date last year + 10-year climatological average
+- **On this day**: ERA5 reanalysis — ~75 years of daily high/low for the current date, record high/low, averages (cached annually per location)
 
 All values shown in dual units (°F/°C, mph/km/h, in/mm). Display order is
 user-configurable via DM — see [Personalizing via DM](#personalizing-via-dm).

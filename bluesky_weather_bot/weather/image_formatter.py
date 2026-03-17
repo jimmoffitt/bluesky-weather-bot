@@ -297,6 +297,108 @@ class WeatherImageFormatter:
         # images: list of raw PNG bytes; alts: matching alt strings; caption: ≤300 chars
     """
 
+    @staticmethod
+    def render_help_card() -> bytes:
+        """
+        Generate a standalone help/commands reference card as PNG bytes.
+        Suitable for posting as a Bluesky image or returning in a DM help response.
+        """
+        W      = 640
+        MARGIN = 28
+        HDR_H  = 76
+
+        f_title  = _font_syne(22)
+        f_sect   = _font_mono(14, medium=True)
+        f_cmd    = _font_mono(15, medium=True)
+        f_desc   = _font_mono(14)
+        f_foot   = _font_mono(12)
+
+        SECTIONS = [
+            ("WEATHER REQUEST", [
+                ("80501",              "ZIP code lookup"),
+                ("Denver, CO",         "City + state lookup"),
+                ("Portland",           "All cities with that name"),
+                ("(blank DM)",         "Use your saved home location"),
+            ]),
+            ("HOME LOCATION", [
+                ("set home Denver, CO","Save a home location"),
+                ("set home 80501",     "Save home by ZIP"),
+                ("clear home",         "Remove saved home location"),
+            ]),
+            ("UNITS", [
+                ("imperial",           "Switch to °F / mph (default)"),
+                ("metric",             "Switch to °C / km/h"),
+            ]),
+            ("ACCOUNT", [
+                ("settings",           "Show your current preferences"),
+                ("reset",              "Reset all preferences to default"),
+                ("help  or  ?",        "Show this command list"),
+            ]),
+        ]
+
+        # Pre-calculate height
+        ROW_H   = 26
+        SECT_H  = 28   # section header height
+        GAP     = 10   # gap between sections
+        FOOT_H  = 36
+
+        content_h = 0
+        for _, rows in SECTIONS:
+            content_h += SECT_H + len(rows) * ROW_H + GAP
+        H = HDR_H + content_h + FOOT_H + MARGIN
+
+        img, draw = _new_card(W, H)
+
+        # Header
+        draw.rectangle([(0, 0), (W, HDR_H - 3)], fill=_hex_to_rgb(HDR_BG))
+        draw.rectangle([(0, HDR_H - 3), (W, HDR_H)], fill=_hex_to_rgb(BLUE))
+        draw.text((MARGIN, 14), "ZipWx", font=_font_syne(28), fill=TEXT_PRI)
+        draw.text((MARGIN, 46), "DM Command Reference", font=_font_mono(16), fill=TEXT_MUT)
+
+        # Badge top-right
+        badge = "via DM"
+        f_badge = _font_syne(15)
+        bb = draw.textbbox((0, 0), badge, font=f_badge)
+        bw, bh = bb[2] - bb[0], bb[3] - bb[1]
+        bpx, bpy = 10, 4
+        bx2 = W - 16
+        bx1 = bx2 - bw - 2 * bpx
+        by1 = (HDR_H - 3 - bh - 2 * bpy) // 2
+        by2 = by1 + bh + 2 * bpy
+        draw.rounded_rectangle([(bx1, by1), (bx2, by2)], radius=100,
+                                fill=(24, 36, 56), outline=_hex_to_rgb(BLUE), width=1)
+        draw.text((bx1 + bpx, by1 + bpy), badge, font=f_badge, fill=_hex_to_rgb(BLUE))
+
+        y = HDR_H + GAP
+
+        CMD_COL  = MARGIN
+        DESC_COL = MARGIN + 200
+
+        for section, rows in SECTIONS:
+            # Section label
+            draw.rectangle([(0, y), (W, y + SECT_H - 2)], fill=_hex_to_rgb(HDR_BG))
+            draw.text((MARGIN, y + 6), section, font=f_sect, fill=_hex_to_rgb(BLUE))
+            y += SECT_H
+
+            for cmd, desc in rows:
+                draw.text((CMD_COL,  y + 4), cmd,  font=f_cmd,  fill=TEXT_PRI)
+                draw.text((DESC_COL, y + 5), desc, font=f_desc, fill=TEXT_MUT)
+                y += ROW_H
+
+            y += GAP
+
+        # Footer
+        footer = "zipwx.bsky.social  |  Send any DM to get started"
+        fb = draw.textbbox((0, 0), footer, font=f_foot)
+        draw.text(
+            ((W - (fb[2] - fb[0])) // 2, H - FOOT_H + 12),
+            footer, font=f_foot, fill=TEXT_MUT,
+        )
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
     def format_images(
         self, report: WeatherReport, units: str = "imperial"
     ) -> tuple[list[bytes], list[str], str]:
