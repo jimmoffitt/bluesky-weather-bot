@@ -353,7 +353,7 @@ class ZipWx:
             self._send_dm_reply(request, f"Your settings:\n  Units: {units}\n  Home: {home}")
 
         elif cmd == "help":
-            self._send_dm_reply(request, (
+            lines = [
                 "ZipWx commands (via DM):\n"
                 "  80501 or Denver, CO  — get weather\n"
                 "  set home Denver, CO  — save home location\n"
@@ -361,7 +361,9 @@ class ZipWx:
                 "  imperial / metric    — display units\n"
                 "  settings             — view preferences\n"
                 "  reset                — clear all preferences"
-            ))
+            ]
+            _append_latency_footer(lines, request.received_at, self._settings.server_type)
+            self._send_dm_reply(request, lines[0])
 
         else:
             logger.warning("[bot] Unknown DM command: %r", cmd)
