@@ -3,19 +3,19 @@ FirehoseAlertChannel
 
 Connects to the Bluesky AT Protocol firehose (com.atproto.sync.subscribeRepos)
 and streams all public posts in real time. Posts that match the configured
-trigger patterns (hashtags and/or mention of the bot handle) are parsed
-for a location and dispatched as AlertRequests.
+trigger patterns are parsed for a location and dispatched as AlertRequests.
 
 Trigger detection:
-  - Mention:  post mentions @<bot_handle>
-
-Location extraction: scans post text for a zip code or "City, ST" pattern
-following the mention.
+  Post must @mention the bot handle AND contain at least one location token:
+    - 5-digit US zip code  (e.g. "80501")
+    - City, ST pattern     (e.g. "Denver, CO")
+    - Top-200 US city name (e.g. "Denver", "Portland", "Chicago")
 
 Pattern examples the parser handles:
   "@zipwx.bsky.social 80501"
   "@zipwx.bsky.social Denver, CO"
   "@zipwx.bsky.social Portland"   ← ambiguous; resolver will return both
+  "weather for Denver? @zipwx.bsky.social"
 
 Dependencies: pip install atproto
 """
@@ -43,6 +43,24 @@ _LOCATION_RE = re.compile(
 
 _ZIP_RE     = re.compile(r"\b(\d{5})\b")
 _CITY_ST_RE = re.compile(r"\b([A-Z][a-zA-Z\s]{2,20}),\s*([A-Z]{2})\b")
+
+# Build a regex from top-200 city names for bare-city matching.
+# Sorted longest-first so "New York" matches before "York".
+def _build_city_re() -> re.Pattern:
+    try:
+        from bluesky_weather_bot.archive.cities import TOP_200
+        names = sorted(
+            {c.name.split(",")[0].strip() for c in TOP_200},
+            key=len,
+            reverse=True,
+        )
+        pattern = r"\b(?:" + "|".join(re.escape(n) for n in names) + r")\b"
+        return re.compile(pattern, re.IGNORECASE)
+    except Exception:
+        # Fallback: never matches — zip/city-ST still work
+        return re.compile(r"(?!)")
+
+_KNOWN_CITY_RE = _build_city_re()
 
 
 class FirehoseAlertChannel(AlertChannel):
@@ -74,7 +92,7 @@ class FirehoseAlertChannel(AlertChannel):
             daemon=True,
         )
         self._thread.start()
-        logger.info("[firehose] Started — watching for @%s mentions", self._bot_handle)
+        logger.info("[firehose] Started — watching for @%s + location token", self._bot_handle)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -189,8 +207,21 @@ class FirehoseAlertChannel(AlertChannel):
             return None
 
     def _is_trigger(self, text: str) -> bool:
-        """Returns True if the post text mentions the bot handle."""
-        return f"@{self._bot_handle}" in text.lower()
+        """
+        Returns True if the post @mentions the bot AND contains a location token.
+
+        Location tokens accepted:
+          - 5-digit zip code (e.g. 80501)
+          - City, ST pattern (e.g. Denver, CO)
+          - Top-200 US city name without state (e.g. Denver, Portland, Chicago)
+        """
+        if f"@{self._bot_handle}" not in text.lower():
+            return False
+        return bool(
+            _ZIP_RE.search(text)
+            or _CITY_ST_RE.search(text)
+            or _KNOWN_CITY_RE.search(text)
+        )
 
     def _build_request(self, text: str, repo: str, op) -> Optional[AlertRequest]:
         """

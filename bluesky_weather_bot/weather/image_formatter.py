@@ -396,16 +396,22 @@ class WeatherImageFormatter:
         return buf.getvalue()
 
     def format_images(
-        self, report: WeatherReport, units: str = "imperial"
+        self, report: WeatherReport, units: str = "imperial", layout: str = "phone"
     ) -> tuple[list[bytes], list[str], str]:
         images: list[bytes] = []
         alts:   list[str]   = []
 
-        card1 = self._render_current_card(report, units)
+        if layout == "desktop":
+            card1 = self._render_current_card_desktop(report, units)
+        else:
+            card1 = self._render_current_card(report, units)
         images.append(card1)
         alts.append(self._alt_current(report))
 
-        card2 = self._render_forecast_card(report)
+        if layout == "desktop":
+            card2 = self._render_forecast_card_desktop(report)
+        else:
+            card2 = self._render_forecast_card(report)
         images.append(card2)
         alts.append(self._alt_forecast_card(report))
 
@@ -656,6 +662,203 @@ class WeatherImageFormatter:
             draw.text((LBL_X, rym - lh // 2), label, font=f_lbl, fill=TEXT_MUT)
 
             # Value(s) — vertically centred, right-aligned
+            if bar_pct is not None:
+                vb     = draw.textbbox((0, 0), pri_val, font=f_pri)
+                pw, ph = vb[2] - vb[0], vb[3] - vb[1]
+                bar_x1 = LBL_X + lw + 16
+                bar_x2 = VAL_X - pw - 12
+                bar_fill = _hex_to_rgb(BLUE if icon_color == "blue" else AMBER)
+                if bar_x2 > bar_x1 + 4:
+                    draw.rounded_rectangle(
+                        [(bar_x1, rym - 3), (bar_x2, rym + 3)],
+                        radius=3, fill=_hex_to_rgb(SEP))
+                    fill_w = int((bar_x2 - bar_x1) * min(bar_pct, 100.0) / 100.0)
+                    if fill_w > 4:
+                        draw.rounded_rectangle(
+                            [(bar_x1, rym - 3), (bar_x1 + fill_w, rym + 3)],
+                            radius=3, fill=bar_fill)
+                draw.text((VAL_X - pw, rym - ph // 2), pri_val, font=f_pri, fill=TEXT_PRI)
+            elif sec_val:
+                bp     = draw.textbbox((0, 0), pri_val, font=f_pri)
+                bs     = draw.textbbox((0, 0), sec_val, font=f_sec)
+                pw, ph = bp[2] - bp[0], bp[3] - bp[1]
+                sw, sh = bs[2] - bs[0], bs[3] - bs[1]
+                x_sec  = VAL_X - sw
+                x_pri  = x_sec - pw
+                draw.text((x_pri, rym - ph // 2), pri_val, font=f_pri, fill=TEXT_PRI)
+                draw.text((x_sec, rym - sh // 2), sec_val, font=f_sec, fill=TEXT_MUT)
+            else:
+                vb     = draw.textbbox((0, 0), pri_val, font=f_pri)
+                pw, ph = vb[2] - vb[0], vb[3] - vb[1]
+                draw.text((VAL_X - pw, rym - ph // 2), pri_val, font=f_pri, fill=TEXT_PRI)
+
+        return _to_png(img)
+
+    # ------------------------------------------------------------------
+    # Card 1 (desktop) — Current conditions landscape  (1200 × 600 px)
+    # Left column: big temp + feels-like + sunrise/sunset
+    # Right column: 6 stats rows (same metrics as portrait card)
+    # ------------------------------------------------------------------
+
+    def _render_current_card_desktop(self, report: WeatherReport, units: str = "imperial") -> bytes:
+        W      = 1200
+        H      = 600
+        H_HDR  = 76
+        LEFT_W = 520      # left column: temperature display
+        STAT_X = LEFT_W + 40  # right column stats start
+
+        img, draw = _new_card(W, H)
+
+        c        = report.current
+        loc      = report.location.display_name
+        ts       = c.timestamp
+        tz       = _tz_abbr(report.location.timezone, ts)
+        dow      = ts.strftime("%a").upper()
+        mon      = ts.strftime("%b").upper()
+        day      = ts.day
+        hour12   = ts.hour % 12 or 12
+        minute   = ts.strftime("%M")
+        ampm     = "AM" if ts.hour < 12 else "PM"
+        ts_str   = f"{dow} {mon} {day}  \u00b7  {hour12}:{minute} {ampm} {tz}"
+        cardinal = _deg_to_cardinal(c.wind_direction_deg)
+
+        # ── Header (full width) ────────────────────────────────────────────────
+        self._draw_location_header(draw, W, loc, ts_str,
+                                   badge_text=c.weather_description[:24])
+
+        # ── Left column: temp panel background ───────────────────────────────
+        draw.rectangle([(0, H_HDR), (LEFT_W, H)], fill=_hex_to_rgb(PANEL_L))
+        draw.line([(LEFT_W, H_HDR + 16), (LEFT_W, H - 16)],
+                  fill=_hex_to_rgb(BORDER), width=1)
+
+        metric    = (units == "metric")
+        pri_num   = f"{c.temperature_c:.0f}" if metric else f"{c.temperature_f:.0f}"
+        pri_unit  = "\u00b0C"               if metric else "\u00b0F"
+        sec_num   = f"{c.temperature_f:.0f}" if metric else f"{c.temperature_c:.0f}"
+        sec_unit  = "\u00b0F"               if metric else "\u00b0C"
+        feels_val = f"{c.feels_like_c:.0f}" if metric else f"{c.feels_like_f:.0f}"
+        feels_u   = "\u00b0C"              if metric else "\u00b0F"
+
+        f_num    = _font_syne(94)
+        f_unit   = _font_syne(42)
+        f_tc_num = _font_syne(66)
+        f_tc_u   = _font_syne(42)
+
+        nb  = draw.textbbox((0, 0), pri_num,  font=f_num)
+        ub  = draw.textbbox((0, 0), pri_unit, font=f_unit)
+        cb  = draw.textbbox((0, 0), sec_num,  font=f_tc_num)
+        tub = draw.textbbox((0, 0), sec_unit, font=f_tc_u)
+
+        nw = nb[2] - nb[0]; n_bot = nb[3]
+        uw = ub[2] - ub[0]; cw    = cb[2] - cb[0]
+
+        feels_h   = 18 + 8
+        content_h = n_bot + 10 + feels_h
+        # Reserve 70px at bottom of left column for sunrise/sunset
+        avail_h   = H - H_HDR - 70
+        ty        = H_HDR + max(8, (avail_h - content_h) // 2)
+
+        GAP_TC  = 32
+        total_w = nw + 4 + uw + GAP_TC + cw + (tub[2] - tub[0])
+        tx      = (LEFT_W - total_w) // 2
+
+        baseline = ty + n_bot
+        draw.text((tx, ty), pri_num, font=f_num, fill=AMBER)
+        draw.text((tx + nw + 4,                    baseline - ub[3]),  pri_unit, font=f_unit,   fill=AMBER)
+        draw.text((tx + nw + 4 + uw + GAP_TC,      baseline - cb[3]),  sec_num,  font=f_tc_num, fill=TEXT_MUT)
+        draw.text((tx + nw + 4 + uw + GAP_TC + cw, baseline - tub[3]), sec_unit, font=f_tc_u,  fill=TEXT_MUT)
+
+        feels_str = f"FEELS LIKE  {feels_val}{feels_u}"
+        fb = draw.textbbox((0, 0), feels_str, font=_font_mono(27))
+        fx = max(8, (LEFT_W - (fb[2] - fb[0])) // 2)
+        draw.text((fx, baseline + 10), feels_str, font=_font_mono(27), fill=TEXT_MUT)
+
+        # ── Sunrise / Sunset — bottom of left column ──────────────────────────
+        today_slot = (report.daily_forecast.slots[0]
+                      if report.daily_forecast.slots else None)
+        if today_slot and (today_slot.sunrise or today_slot.sunset):
+            f_sun_lbl  = _font_mono(14)
+            f_sun_time = _font_mono(17, medium=True)
+            icon_r = 11
+            sun_y  = H - 38
+            sr_x   = LEFT_W // 4 - 20
+            ss_x   = LEFT_W * 3 // 4 - 20
+
+            for is_rise, slot_dt, sun_x in (
+                (True,  today_slot.sunrise, sr_x),
+                (False, today_slot.sunset,  ss_x),
+            ):
+                if slot_dt is None:
+                    continue
+                text_x = sun_x + icon_r + 14
+                _draw_icon(draw, sun_x, sun_y, icon_r,
+                           "sunrise" if is_rise else "sunset",
+                           _hex_to_rgb(AMBER))
+                lbl = "RISE" if is_rise else "SET"
+                lb  = draw.textbbox((0, 0), lbl, font=f_sun_lbl)
+                draw.text((text_x, sun_y - (lb[3] - lb[1]) - 1),
+                          lbl, font=f_sun_lbl, fill=TEXT_MUT)
+                time_str = slot_dt.strftime("%I:%M %p").lstrip("0")
+                draw.text((text_x, sun_y + 2), time_str, font=f_sun_time, fill=TEXT_PRI)
+
+        # ── Right column: stats rows ───────────────────────────────────────────
+        ROW_H  = (H - H_HDR) // 6
+        f_lbl  = _font_mono(32)
+        f_pri  = _font_mono(37, medium=True)
+        f_sec  = _font_mono(29)
+        ICON_X = STAT_X + 30
+        LBL_X  = STAT_X + 80
+        VAL_X  = W - 16
+
+        if metric:
+            wind_pri  = f"{c.wind_speed_kph:.0f} km/h {cardinal}"
+            wind_sec  = f"  \u00b7  {c.wind_speed_mph:.0f} mph"
+            gusts_pri = f"{c.wind_gusts_kph:.0f} km/h"
+            gusts_sec = f"  \u00b7  {c.wind_gusts_mph:.0f} mph"
+            prec_pri  = f"{c.precipitation_mm:.1f} mm"
+            prec_sec  = f"  \u00b7  {c.precipitation_in:.2f} in"
+        else:
+            wind_pri  = f"{c.wind_speed_mph:.0f} mph {cardinal}"
+            wind_sec  = f"  \u00b7  {c.wind_speed_kph:.0f} km/h"
+            gusts_pri = f"{c.wind_gusts_mph:.0f} mph"
+            gusts_sec = f"  \u00b7  {c.wind_gusts_kph:.0f} km/h"
+            prec_pri  = f"{c.precipitation_in:.2f} in"
+            prec_sec  = f"  \u00b7  {c.precipitation_mm:.1f} mm"
+
+        rows = [
+            ("HUMIDITY",    "blue",  "drop",     c.humidity_pct,
+             f"{c.humidity_pct:.0f} %",    None),
+            ("CLOUD COVER", "amber", "cloud",    c.cloud_cover_pct,
+             f"{c.cloud_cover_pct:.0f} %", None),
+            ("WIND",        "muted", "wind",     None, wind_pri,  wind_sec),
+            ("GUSTS",       "muted", "arrow_up", None, gusts_pri, gusts_sec),
+            ("PRECIP",      "muted", "rain",     None, prec_pri,  prec_sec),
+            ("PRESSURE",    "muted", "gauge",    None,
+             f"{c.surface_pressure_hpa:.0f} hPa", None),
+        ]
+
+        for i, (label, icon_color, icon_type, bar_pct, pri_val, sec_val) in enumerate(rows):
+            ry  = H_HDR + i * ROW_H
+            rym = ry + ROW_H // 2
+
+            if i > 0:
+                draw.line([(LEFT_W, ry), (W, ry)], fill=_hex_to_rgb(SEP), width=1)
+
+            ic_bg  = ((18, 42, 80)  if icon_color == "blue"  else
+                      (55, 36, 14)  if icon_color == "amber" else
+                      (28, 40, 62))
+            ic_clr = (_hex_to_rgb(BLUE)  if icon_color == "blue"  else
+                      _hex_to_rgb(AMBER) if icon_color == "amber" else
+                      _hex_to_rgb(TEXT_MUT))
+            draw.rounded_rectangle(
+                [(ICON_X - 23, rym - 23), (ICON_X + 23, rym + 23)],
+                radius=7, fill=ic_bg)
+            _draw_icon(draw, ICON_X, rym, 13, icon_type, ic_clr)
+
+            lb = draw.textbbox((0, 0), label, font=f_lbl)
+            lh, lw = lb[3] - lb[1], lb[2] - lb[0]
+            draw.text((LBL_X, rym - lh // 2), label, font=f_lbl, fill=TEXT_MUT)
+
             if bar_pct is not None:
                 vb     = draw.textbbox((0, 0), pri_val, font=f_pri)
                 pw, ph = vb[2] - vb[0], vb[3] - vb[1]
@@ -949,6 +1152,234 @@ class WeatherImageFormatter:
         f_foot  = _font_mono(13)
         footer  = "ZipWx  |  Open-Meteo"
         fb      = draw.textbbox((0, 0), footer, font=f_foot)
+        draw.text((W - (fb[2] - fb[0]) - MARGIN, H - H_FOOT + 10),
+                  footer, font=f_foot, fill=TEXT_MUT)
+
+        return _to_png(img)
+
+    # ------------------------------------------------------------------
+    # Card 2 (desktop) — Forecast landscape  (12-hr left | 7-day right)
+    # ------------------------------------------------------------------
+
+    def _render_forecast_card_desktop(self, report: WeatherReport) -> bytes:
+        """Landscape forecast card — 12-hour hourly and 7-day sections side by side."""
+        MARGIN = 20
+
+        hist         = report.historical
+        has_year_ago = hist.year_ago is not None
+        has_ten_yr   = hist.ten_year_avg is not None
+        has_hist     = has_year_ago or has_ten_yr
+
+        # ── Sizing ─────────────────────────────────────────────────────────────
+        col_w   = 60   # hourly column width
+        HR_COLS = 6    # columns per hourly row
+        LEFT_W  = 2 * MARGIN + HR_COLS * col_w   # 400px
+
+        _W_DAY = 62; _W_DESC = 150; _W_HILO = 130; _W_PREC = 46; _W_WIND = 62; _GAP = 16
+        _day_total = _W_DAY + _GAP + _W_DESC + _GAP + _W_HILO + _GAP + _W_PREC + _GAP + _W_WIND
+        RIGHT_W = 2 * MARGIN + _day_total   # 554px
+
+        DIV_GAP = 20
+        W       = LEFT_W + DIV_GAP + RIGHT_W
+        RIGHT_X = LEFT_W + DIV_GAP
+
+        H_HDR      = 76
+        H_LBL      = 34
+        H_HR_ROW   = 118
+        H_HR_GAP   = 10
+        H_HR       = 2 * H_HR_ROW + H_HR_GAP
+        H_DAY_ROW  = 48
+        H_DAY      = 7 * H_DAY_ROW
+        H_HIST_BLK = 60
+        H_FOOT     = 32
+
+        right_h = H_LBL + H_DAY
+        if has_hist:
+            right_h += 6 + H_LBL
+            if has_year_ago: right_h += H_HIST_BLK
+            if has_ten_yr:   right_h += H_HIST_BLK
+        H = H_HDR + right_h + H_FOOT
+
+        img, draw = _new_card(W, H)
+
+        # ── Header ─────────────────────────────────────────────────────────────
+        ts     = report.current.timestamp
+        tz     = _tz_abbr(report.location.timezone, ts)
+        hour12 = ts.hour % 12 or 12
+        ampm   = "AM" if ts.hour < 12 else "PM"
+        ts_str = (f"{ts.strftime('%a').upper()} {ts.strftime('%b').upper()} {ts.day}"
+                  f"  \u00b7  {hour12}:{ts.strftime('%M')} {ampm} {tz}")
+        self._draw_location_header(draw, W, report.location.display_name, ts_str)
+
+        y = H_HDR
+
+        # ── Left column: 12-hour hourly ─────────────────────────────────────
+        f_hr_lbl  = _font_mono(19)
+        f_hr_time = _font_mono(15)
+        f_hr_temp = _font_syne(20)
+        f_hr_wind = _font_mono(14)
+        f_hr_pct  = _font_mono(13)
+
+        hr_x0        = MARGIN
+        hourly_slots = report.forecast.slots[:12]
+
+        draw.text((hr_x0, y + 8), "NEXT 12 HOURS", font=f_hr_lbl, fill=TEXT_MUT)
+
+        def _draw_hr_row(slots_row, row_y):
+            for i, slot in enumerate(slots_row):
+                cx = hr_x0 + i * col_w + col_w // 2
+                if i > 0:
+                    draw.line(
+                        [(hr_x0 + i * col_w, row_y + 4),
+                         (hr_x0 + i * col_w, row_y + H_HR_ROW - 4)],
+                        fill=_hex_to_rgb(BORDER), width=1,
+                    )
+                lbl = _hour_label(slot.hour)
+                lb  = draw.textbbox((0, 0), lbl, font=f_hr_time)
+                draw.text((cx - (lb[2] - lb[0]) // 2, row_y + 5),
+                          lbl, font=f_hr_time, fill=TEXT_MUT)
+                temp_str = f"{slot.temperature_f:.0f}\u00b0"
+                tb = draw.textbbox((0, 0), temp_str, font=f_hr_temp)
+                draw.text((cx - (tb[2] - tb[0]) // 2, row_y + 25),
+                          temp_str, font=f_hr_temp, fill=AMBER)
+                wind_str = f"{slot.wind_speed_mph:.0f}mph"
+                wb = draw.textbbox((0, 0), wind_str, font=f_hr_wind)
+                draw.text((cx - (wb[2] - wb[0]) // 2, row_y + 51),
+                          wind_str, font=f_hr_wind, fill=TEXT_MUT)
+                pct       = slot.precipitation_probability_pct
+                bar_max_h = 22
+                bar_w     = max(6, col_w - 16)
+                bar_bot   = row_y + H_HR_ROW - 16
+                bx1 = cx - bar_w // 2; bx2 = cx + bar_w // 2
+                draw.rounded_rectangle([(bx1, bar_bot - bar_max_h), (bx2, bar_bot)],
+                                        radius=3, fill=_hex_to_rgb(SEP))
+                fill_h = int(bar_max_h * min(pct, 100.0) / 100.0)
+                if fill_h >= 2:
+                    draw.rounded_rectangle([(bx1, bar_bot - fill_h), (bx2, bar_bot)],
+                                            radius=3, fill=_hex_to_rgb(BLUE))
+                pct_str = f"{pct:.0f}%"
+                pb = draw.textbbox((0, 0), pct_str, font=f_hr_pct)
+                draw.text((cx - (pb[2] - pb[0]) // 2, bar_bot + 2),
+                          pct_str, font=f_hr_pct, fill=TEXT_MUT)
+
+        hr_y   = y + H_LBL
+        row2_y = hr_y + H_HR_ROW + H_HR_GAP
+        _draw_hr_row(hourly_slots[:6], hr_y)
+        draw.line(
+            [(hr_x0, row2_y - H_HR_GAP // 2),
+             (hr_x0 + HR_COLS * col_w, row2_y - H_HR_GAP // 2)],
+            fill=_hex_to_rgb(SEP), width=1,
+        )
+        _draw_hr_row(hourly_slots[6:], row2_y)
+
+        # Vertical divider between columns
+        div_x = LEFT_W + DIV_GAP // 2
+        draw.line([(div_x, H_HDR + 16), (div_x, H - H_FOOT - 8)],
+                  fill=_hex_to_rgb(BORDER), width=1)
+
+        # ── Right column: 7-day forecast ────────────────────────────────────
+        f_day_name = _font_mono(17, medium=True)
+        f_day_desc = _font_mono(15)
+        f_day_hilo = _font_mono(17, medium=True)
+        f_day_pct  = _font_mono(15)
+        f_day_wind = _font_mono(15)
+
+        day_x0 = RIGHT_X + MARGIN
+        draw.text((day_x0, y + 8), "7-DAY FORECAST", font=f_hr_lbl, fill=TEXT_MUT)
+
+        C_DAY  = day_x0
+        C_DESC = day_x0 + _W_DAY + _GAP
+        C_HILO = day_x0 + _W_DAY + _GAP + _W_DESC + _GAP
+        C_PREC = day_x0 + _W_DAY + _GAP + _W_DESC + _GAP + _W_HILO + _GAP
+        C_WIND = day_x0 + _W_DAY + _GAP + _W_DESC + _GAP + _W_HILO + _GAP + _W_PREC + _GAP
+
+        today = date.today()
+        day_y = y + H_LBL
+        for i, slot in enumerate(report.daily_forecast.slots[:7]):
+            ry  = day_y + i * H_DAY_ROW
+            rym = ry + H_DAY_ROW // 2
+            if i > 0:
+                draw.line([(day_x0 - MARGIN + 4, ry), (day_x0 + _day_total, ry)],
+                           fill=_hex_to_rgb(SEP), width=1)
+            if slot.date.date() == today:
+                draw.rectangle(
+                    [(day_x0 - MARGIN + 4, ry), (day_x0 + _day_total + 4, ry + H_DAY_ROW)],
+                    fill=_hex_to_rgb(PANEL_L))
+                if i > 0:
+                    draw.line([(day_x0 - MARGIN + 4, ry), (day_x0 + _day_total, ry)],
+                               fill=_hex_to_rgb(SEP), width=1)
+            if slot.date.date() == today:
+                day_lbl, day_color = "TODAY", AMBER
+            else:
+                day_lbl, day_color = slot.date.strftime("%a").upper(), TEXT_PRI
+            db = draw.textbbox((0, 0), day_lbl, font=f_day_name)
+            draw.text((C_DAY, rym - (db[3] - db[1]) // 2),
+                      day_lbl, font=f_day_name, fill=day_color)
+            desc = slot.weather_description
+            while desc:
+                bb = draw.textbbox((0, 0), desc, font=f_day_desc)
+                if bb[2] - bb[0] <= _W_DESC - 4:
+                    break
+                desc = desc[:-1]
+            if desc != slot.weather_description:
+                desc = desc[:-1] + ".."
+            db2 = draw.textbbox((0, 0), desc, font=f_day_desc)
+            draw.text((C_DESC, rym - (db2[3] - db2[1]) // 2),
+                      desc, font=f_day_desc, fill=TEXT_MUT)
+            hilo_str = f"Hi {slot.temp_max_f:.0f}  Lo {slot.temp_min_f:.0f}"
+            hb = draw.textbbox((0, 0), hilo_str, font=f_day_hilo)
+            draw.text((C_HILO, rym - (hb[3] - hb[1]) // 2),
+                      hilo_str, font=f_day_hilo, fill=AMBER)
+            pct_str = f"{slot.precipitation_probability_max_pct:.0f}%"
+            pb = draw.textbbox((0, 0), pct_str, font=f_day_pct)
+            draw.text((C_PREC, rym - (pb[3] - pb[1]) // 2),
+                      pct_str, font=f_day_pct, fill=TEXT_SKY)
+            wind_str = f"{slot.wind_speed_max_mph:.0f} mph"
+            wbb = draw.textbbox((0, 0), wind_str, font=f_day_wind)
+            draw.text((C_WIND, rym - (wbb[3] - wbb[1]) // 2),
+                      wind_str, font=f_day_wind, fill=TEXT_MUT)
+
+        right_y = day_y + H_DAY
+
+        # ── Historical (right column, below 7-day) ──────────────────────────
+        if has_hist:
+            draw.line([(day_x0, right_y + 3), (day_x0 + _day_total, right_y + 3)],
+                       fill=_hex_to_rgb(SEP), width=1)
+            right_y += 6
+            draw.text((day_x0, right_y + 8), "HISTORICAL", font=f_hr_lbl, fill=TEXT_MUT)
+            right_y += H_LBL
+
+            f_h_hdr = _font_mono(15, medium=True)
+            f_h_val = _font_mono(15)
+
+            def _hist_block_r(rec: DailyHistoricalRecord, header: str, y0: int) -> int:
+                draw.text((day_x0, y0), header, font=f_h_hdr, fill=TEXT_SKY)
+                y0 += 22
+                draw.text(
+                    (day_x0, y0),
+                    f"Hi {rec.temp_max_f:.0f}F ({rec.temp_max_c:.0f}C)  /  "
+                    f"Lo {rec.temp_min_f:.0f}F ({rec.temp_min_c:.0f}C)  |  "
+                    f"Precip {rec.precipitation_in:.2f}in  |  "
+                    f"Wind {rec.wind_speed_max_mph:.0f}mph",
+                    font=f_h_val, fill=TEXT_PRI,
+                )
+                return y0 + (H_HIST_BLK - 22)
+
+            if has_year_ago:
+                d = hist.year_ago.date
+                right_y = _hist_block_r(hist.year_ago,
+                                        f"Last year  ({d.strftime('%b')} {d.day}, {d.year})",
+                                        right_y)
+            if has_ten_yr:
+                d = hist.ten_year_avg.date
+                right_y = _hist_block_r(hist.ten_year_avg,
+                                        f"10-yr avg  ({d.strftime('%b')} {d.day} +/-7d)",
+                                        right_y)
+
+        # ── Footer ──────────────────────────────────────────────────────────
+        f_foot = _font_mono(13)
+        footer = "ZipWx  |  Open-Meteo"
+        fb     = draw.textbbox((0, 0), footer, font=f_foot)
         draw.text((W - (fb[2] - fb[0]) - MARGIN, H - H_FOOT + 10),
                   footer, font=f_foot, fill=TEXT_MUT)
 

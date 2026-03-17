@@ -267,6 +267,10 @@ class Database:
                 -- 'imperial': °F primary, mph, in
                 -- 'metric':   °C primary, km/h, mm
 
+                layout        TEXT NOT NULL DEFAULT 'phone',
+                -- 'phone':   portrait cards (900×900) — optimised for mobile
+                -- 'desktop': landscape cards (1200×600) — optimised for browser
+
                 home_raw      TEXT,
                 -- What the user typed, e.g. "Denver, CO" or "80501"
 
@@ -374,6 +378,15 @@ class Database:
                 "ALTER TABLE requests ADD COLUMN source_uri TEXT"
             )
             logger.info("[db] Migrated: added source_uri column")
+        prefs_cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(user_prefs)").fetchall()
+        }
+        if "layout" not in prefs_cols:
+            self._conn.execute(
+                "ALTER TABLE user_prefs ADD COLUMN layout TEXT NOT NULL DEFAULT 'phone'"
+            )
+            logger.info("[db] Migrated: added user_prefs.layout column")
 
         # Always ensure the dedup index exists — safe to run on every connect
         # because source_uri is now guaranteed to be present.
@@ -731,6 +744,7 @@ class Database:
         did: str,
         handle: Optional[str] = None,
         units: Optional[str] = None,
+        layout: Optional[str] = None,
         home_raw: Optional[str] = None,
         home_display: Optional[str] = None,
         home_lat: Optional[float] = None,
@@ -746,16 +760,17 @@ class Database:
         if existing is None:
             self._conn.execute(
                 """INSERT INTO user_prefs
-                   (user_did, handle, units, home_raw, home_display,
+                   (user_did, handle, units, layout, home_raw, home_display,
                     home_lat, home_lon, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (did, handle, units or "imperial",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (did, handle, units or "imperial", layout or "phone",
                  home_raw, home_display, home_lat, home_lon, _now()),
             )
         else:
             updates: dict = {"updated_at": _now()}
             if handle       is not None: updates["handle"]       = handle
             if units        is not None: updates["units"]        = units
+            if layout       is not None: updates["layout"]       = layout
             if home_raw     is not None: updates["home_raw"]     = home_raw
             if home_display is not None: updates["home_display"] = home_display
             if home_lat     is not None: updates["home_lat"]     = home_lat

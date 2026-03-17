@@ -232,12 +232,14 @@ class ZipWx:
             self._db.update_request_status(db_id, "error")
             return
 
-        # Look up user units preference (applies to all channels)
-        units = "imperial"
+        # Look up user preferences (units + layout; applies to all channels)
+        units  = "imperial"
+        layout = "phone"
         if request.requester_did:
             prefs = self._db.get_user_prefs(request.requester_did)
             if prefs:
-                units = prefs.get("units", "imperial")
+                units  = prefs.get("units",  "imperial")
+                layout = prefs.get("layout", "phone")
 
         # Format and send one thread per resolved location
         self._db.update_request_formatting_start(db_id)
@@ -250,7 +252,9 @@ class ZipWx:
                 and target_channel == "bluesky_post"   # DMs always use text
             )
             if use_images:
-                images, alts, caption = self._image_formatter.format_images(report, units=units)
+                images, alts, caption = self._image_formatter.format_images(
+                    report, units=units, layout=layout
+                )
                 thread_posts = [caption]
                 _append_latency_footer(thread_posts, request.received_at, self._settings.server_type)
                 payload = NotificationPayload(
@@ -343,14 +347,26 @@ class ZipWx:
                 self._db.reset_prefs(did)
             self._send_dm_reply(request, "Preferences reset to defaults (imperial, no home).")
 
+        elif cmd == "set_layout_desktop":
+            self._db.set_user_prefs(did, handle=request.requester_handle, layout="desktop")
+            self._send_dm_reply(request,
+                "Layout set to desktop. Landscape cards optimised for browser viewing.")
+
+        elif cmd == "set_layout_phone":
+            self._db.set_user_prefs(did, handle=request.requester_handle, layout="phone")
+            self._send_dm_reply(request,
+                "Layout set to phone. Portrait cards optimised for mobile viewing.")
+
         elif cmd == "settings":
             prefs = self._db.get_user_prefs(did) if did else None
             if prefs:
-                home  = prefs.get("home_display") or prefs.get("home_raw") or "not set"
-                units = prefs.get("units", "imperial")
+                home   = prefs.get("home_display") or prefs.get("home_raw") or "not set"
+                units  = prefs.get("units", "imperial")
+                layout = prefs.get("layout", "phone")
             else:
-                home, units = "not set", "imperial"
-            self._send_dm_reply(request, f"Your settings:\n  Units: {units}\n  Home: {home}")
+                home, units, layout = "not set", "imperial", "phone"
+            self._send_dm_reply(request,
+                f"Your settings:\n  Units: {units}\n  Layout: {layout}\n  Home: {home}")
 
         elif cmd == "help":
             lines = [
@@ -359,6 +375,7 @@ class ZipWx:
                 "  set home Denver, CO  — save home location\n"
                 "  clear home           — remove home location\n"
                 "  imperial / metric    — display units\n"
+                "  desktop / phone      — image layout\n"
                 "  settings             — view preferences\n"
                 "  reset                — clear all preferences"
             ]

@@ -235,6 +235,10 @@ class DMAlertChannel(AlertChannel):
             return "settings"
         if normalised in ("help", "?", "commands"):
             return "help"
+        if normalised in ("desktop", "set layout desktop", "laptop", "set layout laptop", "wide"):
+            return "set_layout_desktop"
+        if normalised in ("phone", "set layout phone", "mobile", "set layout mobile", "portrait"):
+            return "set_layout_phone"
         return None
 
     @staticmethod
