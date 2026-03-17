@@ -330,7 +330,7 @@ class WeatherImageFormatter:
             ]),
             ("ACCOUNT", [
                 ("settings",           "Show your current preferences"),
-                ("reset",              "Reset all preferences to default"),
+                ("reset",              "Reset all preferences"),
                 ("help  or  ?",        "Show this command list"),
             ]),
         ]
