@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 _ZIP_RE     = re.compile(r"\b(\d{5})\b")
 _CITY_ST_RE = re.compile(r"\b([A-Z][a-zA-Z\s]{2,20}),\s*([A-Z]{2})\b")
 
-DEFAULT_POLL_INTERVAL = 15.0
+DEFAULT_POLL_INTERVAL = 5.0
 
 
 class DMAlertChannel(AlertChannel):
