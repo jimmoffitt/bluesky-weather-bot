@@ -379,16 +379,40 @@ class LocationResolver:
         geolocator = GeoNom(user_agent="bluesky_weather_bot/1.0")
         query = raw if "us" in raw.lower() else f"{raw}, USA"
         try:
-            loc = geolocator.geocode(query, timeout=5)
+            # featuretype=city steers Nominatim toward city/town results,
+            # avoiding venue-level hits (businesses, addresses, POIs).
+            loc = geolocator.geocode(
+                query, timeout=5, addressdetails=True,
+                featuretype="city",
+            )
+            if loc is None:
+                # Retry without restriction for smaller towns / neighborhoods
+                loc = geolocator.geocode(query, timeout=5, addressdetails=True)
         except GeocoderTimedOut:
             raise ValueError(f"Geocoding timed out for {raw!r}")
         if loc is None:
             raise ValueError(f"Could not geocode: {raw!r}")
+
         lat, lon = loc.latitude, loc.longitude
-        parts = loc.address.split(",")
-        display = ", ".join(p.strip() for p in parts[:2])
+
+        # Extract city + state from the structured address dict, not the
+        # display string — the display string can start with a venue name or
+        # street number when Nominatim returns a specific address.
+        addr = loc.raw.get("address", {})
+        city = (addr.get("city") or addr.get("town") or addr.get("village")
+                or addr.get("municipality") or addr.get("county", ""))
+        # ISO3166-2-lvl4 looks like "US-CO"; fall back to full state name
+        iso = addr.get("ISO3166-2-lvl4", "")
+        state = iso.split("-")[-1] if iso else ""
+        if not state:
+            state_full = addr.get("state", "")
+            state = STATE_ABBR.get(state_full.lower(), state_full[:2].upper() if state_full else "")
+        zip_code = addr.get("postcode")
+        display = f"{city}, {state}" if city and state else city or raw
+
+        logger.debug("[resolver] Nominatim: %r → %r (%s, %s)", raw, display, lat, lon)
         return ResolvedLocation(lat=lat, lon=lon, display_name=display,
-                                timezone=self._tz_from_lon(lon))
+                                timezone=self._tz_from_latlon(lat, lon), zip_code=zip_code)
 
     @staticmethod
     def _normalize(raw: str) -> str:
