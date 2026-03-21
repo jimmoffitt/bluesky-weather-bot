@@ -200,7 +200,7 @@ class ZipWx:
                 logger.info("[bot] Using home location %r for %s",
                             request.raw_location, request.requester_handle)
 
-        # No location: file channel broadcasts raw content; social channels get a help reply
+        # No location: file channel broadcasts raw content; DM gets help; firehose is silent drop
         if not request.raw_location:
             if request.source_channel == "file":
                 self._broadcast_raw(request)
@@ -212,6 +212,10 @@ class ZipWx:
                     "  set home Denver, CO\n\n"
                     "Send 'help' for all commands."
                 ))
+            elif request.source_channel == "firehose":
+                # Plain mention with no location and no home — ignore quietly
+                logger.debug("[bot] No location and no home for %s — ignoring",
+                             request.requester_handle)
             else:
                 self._send_help_reply(request)
             self._db.update_request_status(db_id, "complete")

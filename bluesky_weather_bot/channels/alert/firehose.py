@@ -6,16 +6,16 @@ and streams all public posts in real time. Posts that match the configured
 trigger patterns are parsed for a location and dispatched as AlertRequests.
 
 Trigger detection:
-  Post must @mention the bot handle AND contain at least one location token:
-    - 5-digit US zip code  (e.g. "80501")
-    - City, ST pattern     (e.g. "Denver, CO")
-    - Top-200 US city name (e.g. "Denver", "Portland", "Chicago")
+  Post must @mention the bot handle. A location token is not required —
+  if absent, bot.py will use the user's saved home location (or silently
+  drop the request if none is set).
 
 Pattern examples the parser handles:
   "@zipwx.bsky.social 80501"
   "@zipwx.bsky.social Denver, CO"
   "@zipwx.bsky.social Portland"   ← ambiguous; resolver will return both
   "weather for Denver? @zipwx.bsky.social"
+  "@zipwx.bsky.social"            ← plain mention → uses saved home location
 
 Dependencies: pip install atproto
 """
@@ -92,7 +92,7 @@ class FirehoseAlertChannel(AlertChannel):
             daemon=True,
         )
         self._thread.start()
-        logger.info("[firehose] Started — watching for @%s + location token", self._bot_handle)
+        logger.info("[firehose] Started — watching for @%s mentions", self._bot_handle)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -208,20 +208,12 @@ class FirehoseAlertChannel(AlertChannel):
 
     def _is_trigger(self, text: str) -> bool:
         """
-        Returns True if the post @mentions the bot AND contains a location token.
+        Returns True if the post @mentions the bot handle.
 
-        Location tokens accepted:
-          - 5-digit zip code (e.g. 80501)
-          - City, ST pattern (e.g. Denver, CO)
-          - Top-200 US city name without state (e.g. Denver, Portland, Chicago)
+        A plain mention (no location) is still dispatched — bot.py will apply
+        the user's saved home location, or silently drop if none is set.
         """
-        if f"@{self._bot_handle}" not in text.lower():
-            return False
-        return bool(
-            _ZIP_RE.search(text)
-            or _CITY_ST_RE.search(text)
-            or _KNOWN_CITY_RE.search(text)
-        )
+        return f"@{self._bot_handle}" in text.lower()
 
     def _build_request(self, text: str, repo: str, op) -> Optional[AlertRequest]:
         """
