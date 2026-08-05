@@ -253,6 +253,8 @@ class DMAlertChannel(AlertChannel):
             return "clear_alarms"
         if re.match(r"^(?:delete|remove)\s+(?:alarm|alert)\s+\d+$", normalised):
             return "delete_alarm"
+        if re.match(r"^(?:edit|update|change)\s+(?:alarm|alert)\s+\d+\b", normalised):
+            return "edit_alarm"
 
         # ---- Alarm creation ----
         # "alert me if …", "notify me when …", "send me a DM if …", etc.

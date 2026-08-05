@@ -81,6 +81,50 @@ class TestDeactivateAndClear:
         assert db.clear_alarm_rules_for_user("did:plc:nobody") == 0
 
 
+class TestUpdateAlarmRule:
+    def test_overwrites_condition_and_location(self, db):
+        rule_id = db.add_alarm_rule(_make_rule(
+            metric="temp_current", operator="gte", threshold=100.0,
+            location_raw="Denver, CO",
+        ))
+        db.update_alarm_rule(
+            rule_id,
+            location_raw="Boulder, CO",
+            location_display="Boulder, CO",
+            location_lat=40.0,
+            location_lon=-105.3,
+            metric="wind_speed",
+            operator="lt",
+            threshold=5.0,
+            units="metric",
+        )
+        rule = db.get_alarm_rules_for_user("did:plc:alice")[0]
+        assert rule.location_raw == "Boulder, CO"
+        assert rule.location_lat == 40.0
+        assert rule.metric == "wind_speed"
+        assert rule.operator == "lt"
+        assert rule.threshold == 5.0
+        assert rule.units == "metric"
+
+    def test_preserves_id_and_fire_history(self, db):
+        rule_id = db.add_alarm_rule(_make_rule())
+        db.update_alarm_fired(rule_id)
+        db.update_alarm_rule(
+            rule_id,
+            location_raw="Denver, CO",
+            location_display=None,
+            location_lat=None,
+            location_lon=None,
+            metric="temp_current",
+            operator="lt",
+            threshold=10.0,
+            units="imperial",
+        )
+        rule = db.get_alarm_rules_for_user("did:plc:alice")[0]
+        assert rule.id == rule_id
+        assert rule.fire_count == 1
+
+
 class TestUpdates:
     def test_update_alarm_location_persists(self, db):
         rule_id = db.add_alarm_rule(_make_rule())

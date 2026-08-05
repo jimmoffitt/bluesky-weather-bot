@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 import signal
 import threading
 import time
@@ -38,6 +39,7 @@ from datetime import datetime
 from typing import Optional
 
 from bluesky_weather_bot.alarms.checker import AlarmChecker
+from bluesky_weather_bot.alarms.models import AlarmRule
 from bluesky_weather_bot.alarms.parser import parse_alarm_text
 from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest
 from bluesky_weather_bot.channels.alert.dm_poller import DMAlertChannel
@@ -408,6 +410,17 @@ class ZipWx:
                 self._send_dm_reply(request, f"Couldn't create alarm.\n\n{err}")
                 return
 
+            existing = self._db.get_alarm_rules_for_user(did)
+            dup = _find_duplicate_alarm(rule, existing)
+            if dup is not None:
+                loc = dup.location_display or dup.location_raw
+                self._send_dm_reply(request,
+                    f"You already have that alarm.\n"
+                    f"  {loc}: {dup.describe()}\n\n"
+                    f"Reply 'list alarms' to see all your alerts."
+                )
+                return
+
             rule.user_did    = did
             rule.user_handle = request.requester_handle
 
@@ -450,15 +463,14 @@ class ZipWx:
                 loc = r.location_display or r.location_raw
                 fires = f" ({r.fire_count}x fired)" if r.fire_count else ""
                 lines.append(f"  {i}. {loc}: {r.describe()}{fires}")
-            lines.append("\nTo remove: 'delete alarm 1'  |  'clear alarms'")
+            lines.append("\nTo change: 'edit alarm 1 to ...'  |  'delete alarm 1'  |  'clear alarms'")
             self._send_dm_reply(request, "\n".join(lines))
 
         elif cmd == "delete_alarm":
             if not did:
                 self._send_dm_reply(request, "Sorry, I couldn't identify your account.")
                 return
-            import re as _re
-            m = _re.search(r"\d+", request.raw_content)
+            m = re.search(r"\d+", request.raw_content)
             if not m:
                 self._send_dm_reply(request,
                     "Please specify which alarm to delete.\nExample: 'delete alarm 1'")
@@ -481,6 +493,76 @@ class ZipWx:
             self._send_dm_reply(request,
                 f"Alarm #{index + 1} deleted.\n"
                 f"  {loc}: {rule.describe()}"
+            )
+
+        elif cmd == "edit_alarm":
+            if not did:
+                self._send_dm_reply(request, "Sorry, I couldn't identify your account.")
+                return
+            m = re.match(
+                r"^(?:edit|update|change)\s+(?:alarm|alert)\s+(\d+)\s*(?:to\s*)?[:,-]?\s*(.*)$",
+                request.raw_content.strip(),
+                re.I,
+            )
+            new_condition_text = m.group(2).strip() if m else ""
+            if not m or not new_condition_text:
+                self._send_dm_reply(request,
+                    "Please describe the new condition.\n"
+                    "Example: 'edit alarm 1 to alert if temp hits 90'")
+                return
+
+            index = int(m.group(1)) - 1
+            rules = self._db.get_alarm_rules_for_user(did)
+            if index < 0 or index >= len(rules):
+                self._send_dm_reply(request,
+                    f"Alarm #{index + 1} not found. "
+                    f"You have {len(rules)} active alarm(s).\n"
+                    f"Reply 'list alarms' to see them."
+                )
+                return
+            rule = rules[index]
+
+            prefs = self._db.get_user_prefs(did)
+            user_units = (prefs or {}).get("units", "imperial")
+            home_location = (prefs or {}).get("home_raw")
+
+            new_rule, err = parse_alarm_text(
+                new_condition_text,
+                home_location=home_location or rule.location_raw,
+                user_units=user_units,
+            )
+            if err:
+                self._send_dm_reply(request, f"Couldn't update alarm.\n\n{err}")
+                return
+
+            location_changed = new_rule.location_raw.strip().lower() != (rule.location_raw or "").strip().lower()
+            if location_changed:
+                lat, lon, display = None, None, None
+                try:
+                    reports = self._weather.lookup(new_rule.location_raw)
+                    if reports:
+                        loc = reports[0].location
+                        lat, lon, display = loc.lat, loc.lon, loc.display_name
+                except Exception:
+                    pass  # checker will resolve on first run
+            else:
+                lat, lon, display = rule.location_lat, rule.location_lon, rule.location_display
+
+            self._db.update_alarm_rule(
+                rule.id,
+                location_raw=new_rule.location_raw,
+                location_display=display,
+                location_lat=lat,
+                location_lon=lon,
+                metric=new_rule.metric,
+                operator=new_rule.operator,
+                threshold=new_rule.threshold,
+                units=new_rule.units,
+            )
+            loc = display or new_rule.location_raw
+            self._send_dm_reply(request,
+                f"Alarm #{index + 1} updated.\n"
+                f"  {loc}: {new_rule.describe()}"
             )
 
         elif cmd == "clear_alarms":
@@ -508,6 +590,7 @@ class ZipWx:
                 "  alert me if temp hits 100     — DM when condition is met\n"
                 "  alert me if rain chance > 80% — any threshold or metric\n"
                 "  list alarms                   — view active alarms\n"
+                "  edit alarm 1 to ...           — change an alarm's condition\n"
                 "  delete alarm 1                — remove alarm by number\n"
                 "  clear alarms                  — remove all alarms"
             ]
@@ -629,6 +712,23 @@ class ZipWx:
 
 def _now() -> str:
     return datetime.utcnow().isoformat()
+
+
+def _find_duplicate_alarm(candidate: AlarmRule, existing: list[AlarmRule]) -> Optional[AlarmRule]:
+    """
+    Returns the existing rule that duplicates ``candidate`` (same metric,
+    operator, threshold, and location), or None if there's no match.
+    """
+    candidate_loc = candidate.location_raw.strip().lower()
+    for rule in existing:
+        if (
+            rule.metric == candidate.metric
+            and rule.operator == candidate.operator
+            and rule.threshold == candidate.threshold
+            and rule.location_raw.strip().lower() == candidate_loc
+        ):
+            return rule
+    return None
 
 
 def _append_latency_footer(thread_posts: list[str], received_at: datetime,

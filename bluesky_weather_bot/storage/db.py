@@ -903,6 +903,34 @@ class Database:
         self._conn.commit()
         return cur.rowcount
 
+    def update_alarm_rule(
+        self,
+        rule_id: int,
+        *,
+        location_raw: str,
+        location_display: Optional[str],
+        location_lat: Optional[float],
+        location_lon: Optional[float],
+        metric: str,
+        operator: str,
+        threshold: float,
+        units: str,
+    ) -> None:
+        """Overwrite a rule's condition (used by the 'edit alarm' DM command)."""
+        assert self._conn
+        self._conn.execute(
+            """UPDATE alarm_rules
+               SET location_raw = ?, location_display = ?,
+                   location_lat = ?, location_lon = ?,
+                   metric = ?, operator = ?, threshold = ?, units = ?
+             WHERE id = ?""",
+            (
+                location_raw, location_display, location_lat, location_lon,
+                metric, operator, threshold, units, rule_id,
+            ),
+        )
+        self._conn.commit()
+
     def update_alarm_location(
         self, rule_id: int, lat: float, lon: float, display: str
     ) -> None:

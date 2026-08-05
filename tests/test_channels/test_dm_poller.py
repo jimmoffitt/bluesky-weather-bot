@@ -77,6 +77,55 @@ class TestExtractLocation:
 
 
 # ---------------------------------------------------------------------------
+# Command extraction — alarm commands
+# ---------------------------------------------------------------------------
+
+class TestExtractCommandAlarms:
+    @pytest.mark.parametrize("text", [
+        "alarms", "list alarms", "my alarms", "show alarms",
+        "alerts", "list alerts", "My Alarms",
+    ])
+    def test_list_alarms(self, text):
+        assert DMAlertChannel._extract_command(text) == "list_alarms"
+
+    @pytest.mark.parametrize("text", [
+        "clear alarms", "delete all alarms", "remove all alerts", "Clear Alarms",
+    ])
+    def test_clear_alarms(self, text):
+        assert DMAlertChannel._extract_command(text) == "clear_alarms"
+
+    @pytest.mark.parametrize("text", [
+        "delete alarm 1", "remove alarm 2", "delete alert 10",
+    ])
+    def test_delete_alarm(self, text):
+        assert DMAlertChannel._extract_command(text) == "delete_alarm"
+
+    def test_delete_alarm_requires_a_number(self):
+        assert DMAlertChannel._extract_command("delete alarm") is None
+
+    @pytest.mark.parametrize("text", [
+        "edit alarm 1 to alert if temp hits 90",
+        "update alarm 2 to notify me when wind exceeds 30 mph",
+        "change alert 3 to rain chance over 50%",
+    ])
+    def test_edit_alarm(self, text):
+        assert DMAlertChannel._extract_command(text) == "edit_alarm"
+
+    @pytest.mark.parametrize("text", [
+        "alert me if temp hits 100",
+        "notify me when rain chance over 80%",
+        "send me a dm if wind exceeds 50 mph",
+        "set alarm temp hits 100",
+        "add alarm temp hits 100",
+    ])
+    def test_set_alarm(self, text):
+        assert DMAlertChannel._extract_command(text) == "set_alarm"
+
+    def test_plain_location_is_not_a_command(self):
+        assert DMAlertChannel._extract_command("Denver, CO") is None
+
+
+# ---------------------------------------------------------------------------
 # Deduplication
 # ---------------------------------------------------------------------------
 
