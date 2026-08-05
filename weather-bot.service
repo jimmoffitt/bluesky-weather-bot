@@ -1,0 +1,16 @@
+[Unit]
+Description=Bluesky Weather Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/projects/bluesky_weather_bot
+EnvironmentFile=/home/projects/bluesky_weather_bot/.local.env
+ExecStart=/home/projects/bluesky_weather_bot/venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
