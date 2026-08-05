@@ -37,6 +37,8 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from bluesky_weather_bot.alarms.checker import AlarmChecker
+from bluesky_weather_bot.alarms.parser import parse_alarm_text
 from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest
 from bluesky_weather_bot.channels.alert.dm_poller import DMAlertChannel
 from bluesky_weather_bot.channels.alert.file_watcher import FileWatcherAlertChannel
@@ -97,6 +99,9 @@ class ZipWx:
         # Notification channels (outputs), keyed by channel name
         self._notify_channels: dict[str, NotificationChannel] = {}
 
+        # Background alarm checker (started in start(), stopped in stop())
+        self._alarm_checker: Optional[AlarmChecker] = None
+
         self._running = False
         self._lock    = threading.Lock()
 
@@ -132,6 +137,15 @@ class ZipWx:
         for ch in self._alert_channels:
             ch.start()
 
+        dm_channel = self._notify_channels.get("bluesky_dm")
+        if isinstance(dm_channel, BlueskyDMNotifyChannel):
+            self._alarm_checker = AlarmChecker(
+                db=self._db,
+                weather_service=self._weather,
+                dm_channel=dm_channel,
+            )
+            self._alarm_checker.start()
+
         logger.info("ZipWx running. %d alert channel(s), %d notify channel(s).",
                     len(self._alert_channels), len(self._notify_channels))
 
@@ -144,6 +158,11 @@ class ZipWx:
             return
         self._running = False
         logger.info("ZipWx shutting down...")
+        if self._alarm_checker is not None:
+            try:
+                self._alarm_checker.stop()
+            except Exception as exc:
+                logger.warning("Error stopping AlarmChecker: %s", exc)
         for ch in self._alert_channels:
             try:
                 ch.stop()
@@ -372,16 +391,125 @@ class ZipWx:
             self._send_dm_reply(request,
                 f"Your settings:\n  Units: {units}\n  Layout: {layout}\n  Home: {home}")
 
+        elif cmd == "set_alarm":
+            if not did:
+                self._send_dm_reply(request, "Sorry, I couldn't identify your account.")
+                return
+            prefs = self._db.get_user_prefs(did)
+            user_units    = (prefs or {}).get("units", "imperial")
+            home_location = (prefs or {}).get("home_raw")
+
+            rule, err = parse_alarm_text(
+                request.raw_content,
+                home_location=home_location,
+                user_units=user_units,
+            )
+            if err:
+                self._send_dm_reply(request, f"Couldn't create alarm.\n\n{err}")
+                return
+
+            rule.user_did    = did
+            rule.user_handle = request.requester_handle
+
+            # Geocode location eagerly; checker retries on failure
+            try:
+                reports = self._weather.lookup(rule.location_raw)
+                if reports:
+                    loc = reports[0].location
+                    rule.location_lat     = loc.lat
+                    rule.location_lon     = loc.lon
+                    rule.location_display = loc.display_name
+            except Exception:
+                pass  # checker will resolve on first run
+
+            rule_id = self._db.add_alarm_rule(rule)
+            rule.id = rule_id
+            location_display = rule.location_display or rule.location_raw
+            self._send_dm_reply(request,
+                f"Alarm set for {location_display}.\n"
+                f"Condition: {rule.describe()}\n"
+                f"I'll DM you when this is met (cooldown: {int(rule.cooldown_hours)}h).\n\n"
+                f"Reply 'list alarms' to manage your alerts."
+            )
+
+        elif cmd == "list_alarms":
+            if not did:
+                self._send_dm_reply(request, "Sorry, I couldn't identify your account.")
+                return
+            rules = self._db.get_alarm_rules_for_user(did)
+            if not rules:
+                self._send_dm_reply(request,
+                    "You have no active alarms.\n\n"
+                    "To set one, try:\n"
+                    "  alert me if temp hits 100\n"
+                    "  alert me if rain chance over 80%"
+                )
+                return
+            lines = [f"Your active alarms ({len(rules)}):"]
+            for i, r in enumerate(rules, 1):
+                loc = r.location_display or r.location_raw
+                fires = f" ({r.fire_count}x fired)" if r.fire_count else ""
+                lines.append(f"  {i}. {loc}: {r.describe()}{fires}")
+            lines.append("\nTo remove: 'delete alarm 1'  |  'clear alarms'")
+            self._send_dm_reply(request, "\n".join(lines))
+
+        elif cmd == "delete_alarm":
+            if not did:
+                self._send_dm_reply(request, "Sorry, I couldn't identify your account.")
+                return
+            import re as _re
+            m = _re.search(r"\d+", request.raw_content)
+            if not m:
+                self._send_dm_reply(request,
+                    "Please specify which alarm to delete.\nExample: 'delete alarm 1'")
+                return
+            index = int(m.group()) - 1
+            rules = self._db.get_alarm_rules_for_user(did)
+            if not rules:
+                self._send_dm_reply(request, "You have no active alarms.")
+                return
+            if index < 0 or index >= len(rules):
+                self._send_dm_reply(request,
+                    f"Alarm #{index + 1} not found. "
+                    f"You have {len(rules)} active alarm(s).\n"
+                    f"Reply 'list alarms' to see them."
+                )
+                return
+            rule = rules[index]
+            self._db.deactivate_alarm_rule(rule.id)
+            loc = rule.location_display or rule.location_raw
+            self._send_dm_reply(request,
+                f"Alarm #{index + 1} deleted.\n"
+                f"  {loc}: {rule.describe()}"
+            )
+
+        elif cmd == "clear_alarms":
+            if not did:
+                self._send_dm_reply(request, "Sorry, I couldn't identify your account.")
+                return
+            count = self._db.clear_alarm_rules_for_user(did)
+            if count == 0:
+                self._send_dm_reply(request, "You have no active alarms to clear.")
+            else:
+                self._send_dm_reply(request,
+                    f"Cleared {count} alarm{'s' if count != 1 else ''}.")
+
         elif cmd == "help":
             lines = [
                 "ZipWx commands (via DM):\n"
-                "  80501 or Denver, CO  — get weather\n"
-                "  set home Denver, CO  — save home location\n"
-                "  clear home           — remove home location\n"
-                "  imperial / metric    — display units\n"
-                "  desktop / phone      — image layout\n"
-                "  settings             — view preferences\n"
-                "  reset                — clear all preferences"
+                "  80501 or Denver, CO           — get weather\n"
+                "  set home Denver, CO           — save home location\n"
+                "  clear home                    — remove home location\n"
+                "  imperial / metric             — display units\n"
+                "  desktop / phone               — image layout\n"
+                "  settings                      — view preferences\n"
+                "  reset                         — clear all preferences\n\n"
+                "Weather alarms:\n"
+                "  alert me if temp hits 100     — DM when condition is met\n"
+                "  alert me if rain chance > 80% — any threshold or metric\n"
+                "  list alarms                   — view active alarms\n"
+                "  delete alarm 1                — remove alarm by number\n"
+                "  clear alarms                  — remove all alarms"
             ]
             _append_latency_footer(lines, request.received_at, self._settings.server_type)
             self._send_dm_reply(request, lines[0])

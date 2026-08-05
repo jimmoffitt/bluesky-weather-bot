@@ -211,7 +211,7 @@ class DMAlertChannel(AlertChannel):
     @staticmethod
     def _extract_command(text: str) -> Optional[str]:
         """
-        Detects preference commands in DM text.
+        Detects preference and alarm commands in DM text.
 
         Returns a command string or None if the message is a location request.
         Commands take priority over location extraction.
@@ -239,6 +239,34 @@ class DMAlertChannel(AlertChannel):
             return "set_layout_desktop"
         if normalised in ("phone", "set layout phone", "mobile", "set layout mobile", "portrait"):
             return "set_layout_phone"
+
+        # ---- Alarm management ----
+        if normalised in (
+            "alarms", "list alarms", "my alarms", "show alarms",
+            "alerts", "list alerts", "my alerts", "show alerts",
+        ):
+            return "list_alarms"
+        if normalised in (
+            "clear alarms", "delete all alarms", "remove all alarms", "clear all alarms",
+            "clear alerts", "delete all alerts", "remove all alerts", "clear all alerts",
+        ):
+            return "clear_alarms"
+        if re.match(r"^(?:delete|remove)\s+(?:alarm|alert)\s+\d+$", normalised):
+            return "delete_alarm"
+
+        # ---- Alarm creation ----
+        # "alert me if …", "notify me when …", "send me a DM if …", etc.
+        _ALARM_TRIGGERS = [
+            r"^(?:alert|notify|warn)\s+me\s+(?:if|when)\b",
+            r"^send\s+me\s+a?\s*(?:dm|message|notification)\s+(?:if|when)\b",
+            r"^(?:alert|notify)\s+(?:if|when)\b",
+            r"^set\s+alarm\b",
+            r"^add\s+alarm\b",
+        ]
+        for pattern in _ALARM_TRIGGERS:
+            if re.match(pattern, normalised):
+                return "set_alarm"
+
         return None
 
     @staticmethod

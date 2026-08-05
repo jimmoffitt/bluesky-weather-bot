@@ -7,6 +7,7 @@ SQLite with WAL mode. Schema:
   weather_cache   — 1-hour TTL cache of WeatherReport JSON blobs
   seen_dm_ids     — DM message IDs already processed (survives restarts)
   file_inbox_log  — audit trail for file watcher activity
+  alarm_rules     — user-registered weather alarm conditions
 
 Views:
   latency_summary — per-request breakdown of receive / processing / delivery /
@@ -55,6 +56,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+from bluesky_weather_bot.alarms.models import AlarmRule
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +305,39 @@ class Database:
                 ON file_inbox_log(received_at);
             CREATE INDEX IF NOT EXISTS idx_inbox_outcome
                 ON file_inbox_log(outcome);
+
+            -- --------------------------------------------------------
+            -- alarm_rules: user-registered weather alert conditions
+            -- --------------------------------------------------------
+            CREATE TABLE IF NOT EXISTS alarm_rules (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_did         TEXT    NOT NULL,
+                user_handle      TEXT,
+                location_raw     TEXT    NOT NULL,
+                location_display TEXT,
+                location_lat     REAL,
+                location_lon     REAL,
+                metric           TEXT    NOT NULL,
+                -- 'temp_current' | 'temp_forecast_high' | 'temp_forecast_low'
+                -- | 'precip_prob' | 'wind_speed'
+
+                operator         TEXT    NOT NULL,
+                -- 'gte' | 'lte' | 'gt' | 'lt'
+
+                threshold        REAL    NOT NULL,
+                units            TEXT    NOT NULL DEFAULT 'imperial',
+                is_active        INTEGER NOT NULL DEFAULT 1,
+                cooldown_hours   REAL    NOT NULL DEFAULT 4.0,
+                created_at       TEXT    NOT NULL,
+                last_checked_at  TEXT,
+                last_fired_at    TEXT,
+                fire_count       INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_alarm_rules_user
+                ON alarm_rules(user_did);
+            CREATE INDEX IF NOT EXISTS idx_alarm_rules_active
+                ON alarm_rules(is_active);
 
             -- --------------------------------------------------------
             -- latency_summary view
@@ -803,6 +839,102 @@ class Database:
         self._conn.commit()
 
     # ------------------------------------------------------------------
+    # alarm_rules
+    # ------------------------------------------------------------------
+
+    def add_alarm_rule(self, rule: AlarmRule) -> int:
+        """Insert a new alarm rule and return its id."""
+        assert self._conn
+        cur = self._conn.execute(
+            """
+            INSERT INTO alarm_rules (
+                user_did, user_handle,
+                location_raw, location_display, location_lat, location_lon,
+                metric, operator, threshold, units,
+                is_active, cooldown_hours, created_at,
+                last_checked_at, last_fired_at, fire_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rule.user_did, rule.user_handle,
+                rule.location_raw, rule.location_display,
+                rule.location_lat, rule.location_lon,
+                rule.metric, rule.operator, rule.threshold, rule.units,
+                int(rule.is_active), rule.cooldown_hours, _now(),
+                None, None, 0,
+            ),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def get_alarm_rules_for_user(self, did: str) -> list[AlarmRule]:
+        """Return all active alarm rules for a user, ordered by creation time."""
+        assert self._conn
+        rows = self._conn.execute(
+            "SELECT * FROM alarm_rules WHERE user_did = ? AND is_active = 1 ORDER BY created_at",
+            (did,),
+        ).fetchall()
+        return [_row_to_alarm_rule(dict(r)) for r in rows]
+
+    def get_active_alarm_rules(self) -> list[AlarmRule]:
+        """Return all active rules across all users."""
+        assert self._conn
+        rows = self._conn.execute(
+            "SELECT * FROM alarm_rules WHERE is_active = 1 ORDER BY user_did, id",
+        ).fetchall()
+        return [_row_to_alarm_rule(dict(r)) for r in rows]
+
+    def deactivate_alarm_rule(self, rule_id: int) -> bool:
+        """Mark a rule inactive (soft delete). Returns True if a row was updated."""
+        assert self._conn
+        cur = self._conn.execute(
+            "UPDATE alarm_rules SET is_active = 0 WHERE id = ?", (rule_id,)
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def clear_alarm_rules_for_user(self, did: str) -> int:
+        """Deactivate all rules for a user. Returns count removed."""
+        assert self._conn
+        cur = self._conn.execute(
+            "UPDATE alarm_rules SET is_active = 0 WHERE user_did = ? AND is_active = 1",
+            (did,),
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def update_alarm_location(
+        self, rule_id: int, lat: float, lon: float, display: str
+    ) -> None:
+        """Store resolved coordinates once geocoding succeeds."""
+        assert self._conn
+        self._conn.execute(
+            """UPDATE alarm_rules
+               SET location_lat = ?, location_lon = ?, location_display = ?
+             WHERE id = ?""",
+            (lat, lon, display, rule_id),
+        )
+        self._conn.commit()
+
+    def update_alarm_checked(self, rule_id: int) -> None:
+        assert self._conn
+        self._conn.execute(
+            "UPDATE alarm_rules SET last_checked_at = ? WHERE id = ?",
+            (_now(), rule_id),
+        )
+        self._conn.commit()
+
+    def update_alarm_fired(self, rule_id: int) -> None:
+        assert self._conn
+        self._conn.execute(
+            """UPDATE alarm_rules
+               SET last_fired_at = ?, fire_count = fire_count + 1
+             WHERE id = ?""",
+            (_now(), rule_id),
+        )
+        self._conn.commit()
+
+    # ------------------------------------------------------------------
     # file_inbox_log
     # ------------------------------------------------------------------
 
@@ -999,6 +1131,28 @@ class Database:
 
 def _now() -> str:
     return datetime.utcnow().isoformat()
+
+
+def _row_to_alarm_rule(row: dict) -> AlarmRule:
+    return AlarmRule(
+        id=row["id"],
+        user_did=row["user_did"],
+        user_handle=row.get("user_handle"),
+        location_raw=row["location_raw"],
+        location_display=row.get("location_display"),
+        location_lat=row.get("location_lat"),
+        location_lon=row.get("location_lon"),
+        metric=row["metric"],
+        operator=row["operator"],
+        threshold=row["threshold"],
+        units=row.get("units", "imperial"),
+        is_active=bool(row.get("is_active", 1)),
+        cooldown_hours=row.get("cooldown_hours", 4.0),
+        created_at=row.get("created_at"),
+        last_checked_at=row.get("last_checked_at"),
+        last_fired_at=row.get("last_fired_at"),
+        fire_count=row.get("fire_count", 0),
+    )
 
 
 def _cache_key(lat: float, lon: float) -> str:
