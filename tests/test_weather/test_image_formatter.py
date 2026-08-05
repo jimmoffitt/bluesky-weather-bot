@@ -26,6 +26,10 @@ from bluesky_weather_bot.weather.models import (
     HistoricalComparison,
     DailyHistoricalRecord,
 )
+
+# ``report.historical`` (year-ago/10-yr-avg comparison) is unrelated to the
+# "On This Day" card below, which is driven by ``report.this_day_history``
+# instead — a flat list of one DailyHistoricalRecord per past year.
 from bluesky_weather_bot.weather.image_formatter import WeatherImageFormatter
 
 
@@ -71,20 +75,23 @@ def _make_slot(hour: int, temp_f: float = 55.0, precip_pct: float = 10.0) -> Hou
     )
 
 
-def _make_historical() -> HistoricalComparison:
-    rec = DailyHistoricalRecord(
-        date=datetime(2024, 3, 10),
+def _make_historical_record(year: int = 2024) -> DailyHistoricalRecord:
+    return DailyHistoricalRecord(
+        date=datetime(year, 3, 10),
         temp_max_f=60.0, temp_max_c=15.6,
         temp_min_f=38.0, temp_min_c=3.3,
         temp_mean_f=49.0, temp_mean_c=9.4,
         precipitation_in=0.05, precipitation_mm=1.3,
         wind_speed_max_mph=15.0, wind_speed_max_kph=24.1,
     )
-    return HistoricalComparison(year_ago=rec, ten_year_avg=None)
+
+
+def _make_this_day_history(n_years: int = 3) -> list[DailyHistoricalRecord]:
+    return [_make_historical_record(2025 - i) for i in range(n_years)]
 
 
 def _make_report(
-    historical: Optional[HistoricalComparison] = None,
+    this_day_history: Optional[list[DailyHistoricalRecord]] = None,
     n_slots: int = 6,
 ) -> WeatherReport:
     loc = ResolvedLocation(
@@ -97,7 +104,8 @@ def _make_report(
         location=loc,
         current=_make_current(),
         forecast=forecast,
-        historical=historical or HistoricalComparison(),
+        historical=HistoricalComparison(),
+        this_day_history=this_day_history or [],
         generated_at=datetime(2025, 3, 10, 10, 15),
     )
 
@@ -107,20 +115,20 @@ def _make_report(
 # ---------------------------------------------------------------------------
 
 class TestImageCount:
-    def test_two_images_when_no_historical(self):
-        report = _make_report(historical=HistoricalComparison())
+    def test_two_images_when_no_this_day_history(self):
+        report = _make_report(this_day_history=[])
         images, alts, caption = WeatherImageFormatter().format_images(report)
         assert len(images) == 2
         assert len(alts) == 2
 
-    def test_three_images_when_historical_present(self):
-        report = _make_report(historical=_make_historical())
+    def test_three_images_when_this_day_history_present(self):
+        report = _make_report(this_day_history=_make_this_day_history())
         images, alts, caption = WeatherImageFormatter().format_images(report)
         assert len(images) == 3
         assert len(alts) == 3
 
     def test_alts_match_images(self):
-        report = _make_report(historical=_make_historical())
+        report = _make_report(this_day_history=_make_this_day_history())
         images, alts, _ = WeatherImageFormatter().format_images(report)
         assert len(alts) == len(images)
 
@@ -142,12 +150,12 @@ class TestPngValidity:
         pil_img = PILImage.open(io.BytesIO(images[0]))
         assert pil_img.size == (900, 900)
 
-    def test_historical_card_dimensions(self):
-        report = _make_report(historical=_make_historical())
+    def test_this_day_card_dimensions(self):
+        report = _make_report(this_day_history=_make_this_day_history())
         images, _, _ = WeatherImageFormatter().format_images(report)
-        # Third image is the historical card
+        # Third image is the "On This Day" historical chart card
         pil_img = PILImage.open(io.BytesIO(images[2]))
-        assert pil_img.size == (800, 400)
+        assert pil_img.size == (760, 538)
 
 
 # ---------------------------------------------------------------------------
@@ -177,21 +185,20 @@ class TestCaption:
 
 
 # ---------------------------------------------------------------------------
-# _render_historical_card edge cases
+# _render_this_day_card edge cases
 # ---------------------------------------------------------------------------
 
-class TestHistoricalCard:
-    def test_none_when_no_historical_data(self):
+class TestThisDayCard:
+    def test_empty_bytes_when_no_this_day_history(self):
         formatter = WeatherImageFormatter()
-        report = _make_report(historical=HistoricalComparison())
-        result = formatter._render_historical_card(report)
-        assert result is None
+        report = _make_report(this_day_history=[])
+        result = formatter._render_this_day_card(report)
+        assert result == b""
 
-    def test_returns_bytes_when_year_ago_present(self):
+    def test_returns_png_bytes_when_history_present(self):
         formatter = WeatherImageFormatter()
-        report = _make_report(historical=_make_historical())
-        result = formatter._render_historical_card(report)
-        assert result is not None
+        report = _make_report(this_day_history=_make_this_day_history())
+        result = formatter._render_this_day_card(report)
         assert result[:4] == b"\x89PNG"
 
 
