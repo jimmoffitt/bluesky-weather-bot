@@ -47,12 +47,20 @@ _LTE_PAT = re.compile(r'\b(drops?\s+to|falls?\s+to|or\s+lower|or\s+less|at\s+mos
 # Threshold / units extraction
 # ---------------------------------------------------------------------------
 
-_TEMP_F_RE = re.compile(r'\b\d+(?:\.\d+)?\s*(?:°\s*f|degrees?\s*f|fahrenheit)\b', re.I)
-_TEMP_C_RE = re.compile(r'\b\d+(?:\.\d+)?\s*(?:°\s*c|degrees?\s*c|celsius)\b', re.I)
+_TEMP_F_RE = re.compile(r'\b\d+(?:\.\d+)?\s*(?:°\s*f|degrees?\s*f|fahrenheit|f)\b', re.I)
+_TEMP_C_RE = re.compile(r'\b\d+(?:\.\d+)?\s*(?:°\s*c|degrees?\s*c|celsius|c)\b', re.I)
 _PCT_RE    = re.compile(r'\b\d+(?:\.\d+)?\s*%')
 _MPH_RE    = re.compile(r'\b\d+(?:\.\d+)?\s*mph\b', re.I)
 _KPH_RE    = re.compile(r'\b\d+(?:\.\d+)?\s*(?:kph|km/h|kmh)\b', re.I)
-_NUMBER_RE = re.compile(r'\b(\d+(?:\.\d+)?)\b')
+
+# Trailing \b alone rejects a number glued directly to a unit letter/word
+# ("100F", "50mph") since digit and letter are both \w — no boundary between
+# them. Accept the digit run when it's followed by end-of-string, a
+# non-letter (space, %, °, punctuation), or one of the known unit words.
+_NUMBER_RE = re.compile(
+    r'\b(\d+(?:\.\d+)?)(?=$|[^A-Za-z]|(?:f|c|mph|kph|degrees?|fahrenheit|celsius)\b)',
+    re.I,
+)
 
 # ---------------------------------------------------------------------------
 # Location extraction

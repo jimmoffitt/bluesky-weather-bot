@@ -7,8 +7,6 @@ where a digit location (zip code) was previously mistaken for the threshold.
 
 from __future__ import annotations
 
-import pytest
-
 from bluesky_weather_bot.alarms.parser import parse_alarm_text
 
 
@@ -95,16 +93,25 @@ class TestThresholdAndUnits:
         assert rule is None
         assert "threshold" in err.lower()
 
-    @pytest.mark.xfail(
-        reason="Known gap: a unit glued directly to the number ('100F', '38C') "
-        "breaks the \\b word boundary _NUMBER_RE relies on, so no other number "
-        "in the text means the whole message is rejected as 'no threshold'.",
-        strict=True,
-    )
     def test_unit_glued_to_number_still_parses(self):
         rule, err = parse_alarm_text("alert me if temp hits 100F", home_location="Denver, CO")
         assert err is None
         assert rule.threshold == 100.0
+        assert rule.units == "imperial"
+
+    def test_bare_celsius_letter_glued_to_number(self):
+        rule, err = parse_alarm_text("alert me if temp hits 38C", home_location="Denver, CO")
+        assert err is None
+        assert rule.threshold == 38.0
+        assert rule.units == "metric"
+
+    def test_mph_glued_to_number(self):
+        rule, err = parse_alarm_text(
+            "alert me if wind exceeds 50mph", home_location="Denver, CO"
+        )
+        assert err is None
+        assert rule.threshold == 50.0
+        assert rule.units == "imperial"
 
 
 class TestLocationExtraction:
