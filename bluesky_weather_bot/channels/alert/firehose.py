@@ -131,12 +131,19 @@ class FirehoseAlertChannel(AlertChannel):
             from atproto import FirehoseSubscribeReposClient, parse_subscribe_repos_message, CAR, models as atproto_models
             from atproto_firehose.models import MessageFrame
 
-        client = FirehoseSubscribeReposClient()
+        # A fresh client is created on every (re)connect attempt below rather
+        # than reusing one instance for the thread's lifetime — observed live:
+        # after a 'ConsumerTooSlow' disconnect, calling .stop()/.start() again
+        # on the *same* client left dead sockets behind in CLOSE-WAIT (visible
+        # via `ss`) instead of cleanly reconnecting. client.stop() is still
+        # used to release whichever client is currently active.
+        client: Optional["FirehoseSubscribeReposClient"] = None
 
         def on_message(message: MessageFrame) -> None:
             self._last_message_at = time.monotonic()
             if self._stop_event.is_set():
-                client.stop()
+                if client is not None:
+                    client.stop()
                 return
             try:
                 commit = parse_subscribe_repos_message(message)
@@ -214,6 +221,7 @@ class FirehoseAlertChannel(AlertChannel):
         while not self._stop_event.is_set():
             self._last_message_at = time.monotonic()
             try:
+                client = FirehoseSubscribeReposClient()
                 client.start(on_message, on_error)
             except Exception as exc:
                 if self._stop_event.is_set():
@@ -223,6 +231,12 @@ class FirehoseAlertChannel(AlertChannel):
                 if self._stop_event.is_set():
                     break
                 logger.warning("[firehose] Connection ended — reconnecting")
+            finally:
+                if client is not None:
+                    try:
+                        client.stop()
+                    except Exception:
+                        pass
             self._stop_event.wait(timeout=5)
 
     @staticmethod
