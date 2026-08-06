@@ -36,7 +36,13 @@ class TestAddAndGet:
         assert r.operator == "gte"
         assert r.threshold == 100.0
         assert r.is_active is True
+        assert r.is_public is False
         assert r.fire_count == 0
+
+    def test_is_public_round_trips_true(self, db):
+        db.add_alarm_rule(_make_rule(is_public=True))
+        rule = db.get_alarm_rules_for_user("did:plc:alice")[0]
+        assert rule.is_public is True
 
     def test_get_only_returns_active_rules_for_that_user(self, db):
         db.add_alarm_rule(_make_rule(user_did="did:plc:alice"))
@@ -97,6 +103,7 @@ class TestUpdateAlarmRule:
             operator="lt",
             threshold=5.0,
             units="metric",
+            is_public=True,
         )
         rule = db.get_alarm_rules_for_user("did:plc:alice")[0]
         assert rule.location_raw == "Boulder, CO"
@@ -105,6 +112,7 @@ class TestUpdateAlarmRule:
         assert rule.operator == "lt"
         assert rule.threshold == 5.0
         assert rule.units == "metric"
+        assert rule.is_public is True
 
     def test_preserves_id_and_fire_history(self, db):
         rule_id = db.add_alarm_rule(_make_rule())
@@ -119,6 +127,7 @@ class TestUpdateAlarmRule:
             operator="lt",
             threshold=10.0,
             units="imperial",
+            is_public=False,
         )
         rule = db.get_alarm_rules_for_user("did:plc:alice")[0]
         assert rule.id == rule_id

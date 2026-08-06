@@ -161,3 +161,64 @@ class TestCooldown:
     def test_current_metrics_get_default_cooldown(self):
         rule, _ = parse_alarm_text("alert me if temp hits 100", home_location="Denver, CO")
         assert rule.cooldown_hours == 4.0
+
+
+class TestPublicAlarms:
+    def test_default_is_not_public(self):
+        rule, _ = parse_alarm_text(
+            "alert me if temp in Denver, CO hits 100", home_location=None
+        )
+        assert rule.is_public is False
+
+    def test_publicly_keyword_sets_public_flag(self):
+        rule, err = parse_alarm_text(
+            "alert me publicly if temp in Denver, CO hits 100", home_location=None
+        )
+        assert err is None
+        assert rule.is_public is True
+
+    def test_with_post_keyword_sets_public_flag(self):
+        rule, err = parse_alarm_text(
+            "alert me if temp in Denver, CO hits 100 with post", home_location=None
+        )
+        assert err is None
+        assert rule.is_public is True
+
+    def test_publicly_keyword_is_case_insensitive(self):
+        rule, err = parse_alarm_text(
+            "alert me PUBLICLY if temp in Denver, CO hits 100", home_location=None
+        )
+        assert err is None
+        assert rule.is_public is True
+
+    def test_public_alarm_without_explicit_location_is_rejected(self):
+        rule, err = parse_alarm_text(
+            "alert me publicly if temp hits 100", home_location="Denver, CO"
+        )
+        assert rule is None
+        assert "explicit location" in err.lower()
+
+    def test_public_alarm_does_not_fall_back_to_home_location(self):
+        # Even though a home location is available, a public alarm must not
+        # silently use it — only an explicit location in the text counts.
+        rule, err = parse_alarm_text(
+            "alert me publicly if wind exceeds 50 mph", home_location="Boulder, CO"
+        )
+        assert rule is None
+        assert err is not None
+
+    def test_public_alarm_with_explicit_location_succeeds(self):
+        rule, err = parse_alarm_text(
+            "alert me publicly if temp in Denver, CO hits 100", home_location=None
+        )
+        assert err is None
+        assert rule.is_public is True
+        assert rule.location_raw == "Denver, CO"
+
+    def test_private_alarm_still_falls_back_to_home_location(self):
+        rule, err = parse_alarm_text(
+            "alert me if wind exceeds 50 mph", home_location="Boulder, CO"
+        )
+        assert err is None
+        assert rule.is_public is False
+        assert rule.location_raw == "Boulder, CO"

@@ -230,3 +230,69 @@ class TestEvaluateAndMaybeFire:
 
         dm.send.assert_called_once()
         db.update_alarm_fired.assert_not_called()
+
+
+class TestPublicFiring:
+    def _checker_with_post(self):
+        db = MagicMock()
+        weather = MagicMock()
+        dm = MagicMock()
+        post = MagicMock()
+        post.send.return_value = NotificationResult(success=True, channel="bluesky_post")
+        checker = AlarmChecker(db=db, weather_service=weather, dm_channel=dm, post_channel=post)
+        return checker, db, dm, post
+
+    def test_public_rule_posts_publicly_instead_of_dm(self):
+        checker, db, dm, post = self._checker_with_post()
+        rule = _make_rule(operator="gte", threshold=90.0, is_public=True)
+        report = _make_report(temp_f=95.0)
+
+        checker._evaluate_and_maybe_fire(rule, report)
+
+        post.send.assert_called_once()
+        dm.send.assert_not_called()
+        db.update_alarm_fired.assert_called_once_with(rule.id)
+
+        payload = post.send.call_args.args[0]
+        assert payload.target_channel == "bluesky_post"
+        # First element of post_thread is a client_utils.TextBuilder carrying
+        # the @mention facet, not a plain string.
+        text_builder = payload.post_thread[0]
+        assert rule.user_handle in text_builder.build_text()
+        assert "Denver, CO" in text_builder.build_text()
+
+    def test_private_rule_still_uses_dm_when_post_channel_configured(self):
+        checker, db, dm, post = self._checker_with_post()
+        rule = _make_rule(operator="gte", threshold=90.0, is_public=False)
+        report = _make_report(temp_f=95.0)
+
+        checker._evaluate_and_maybe_fire(rule, report)
+
+        dm.send.assert_called_once()
+        post.send.assert_not_called()
+
+    def test_public_rule_without_post_channel_skips_and_does_not_crash(self):
+        # No post_channel wired up (e.g. bluesky_post notify channel not
+        # registered) — should log and skip, not raise or fall back to DM.
+        db = MagicMock()
+        weather = MagicMock()
+        dm = MagicMock()
+        checker = AlarmChecker(db=db, weather_service=weather, dm_channel=dm, post_channel=None)
+        rule = _make_rule(operator="gte", threshold=90.0, is_public=True)
+        report = _make_report(temp_f=95.0)
+
+        checker._evaluate_and_maybe_fire(rule, report)
+
+        dm.send.assert_not_called()
+        db.update_alarm_fired.assert_not_called()
+
+    def test_does_not_record_fire_when_public_post_fails(self):
+        checker, db, dm, post = self._checker_with_post()
+        post.send.return_value = NotificationResult(success=False, channel="bluesky_post", error="boom")
+        rule = _make_rule(operator="gte", threshold=90.0, is_public=True)
+        report = _make_report(temp_f=95.0)
+
+        checker._evaluate_and_maybe_fire(rule, report)
+
+        post.send.assert_called_once()
+        db.update_alarm_fired.assert_not_called()

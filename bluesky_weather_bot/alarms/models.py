@@ -61,6 +61,7 @@ class AlarmRule:
     location_lon: Optional[float] = None
 
     is_active: bool = True
+    is_public: bool = False         # fire as a public @mention post instead of a DM
     cooldown_hours: float = 4.0     # min hours between consecutive fires
     created_at: Optional[str] = None
     last_checked_at: Optional[str] = None

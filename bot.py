@@ -140,11 +140,13 @@ class ZipWx:
             ch.start()
 
         dm_channel = self._notify_channels.get("bluesky_dm")
+        post_channel = self._notify_channels.get("bluesky_post")
         if isinstance(dm_channel, BlueskyDMNotifyChannel):
             self._alarm_checker = AlarmChecker(
                 db=self._db,
                 weather_service=self._weather,
                 dm_channel=dm_channel,
+                post_channel=post_channel if isinstance(post_channel, BlueskyPostNotifyChannel) else None,
             )
             self._alarm_checker.start()
 
@@ -445,10 +447,15 @@ class ZipWx:
             rule_id = self._db.add_alarm_rule(rule)
             rule.id = rule_id
             location_display = rule.location_display or rule.location_raw
+            notify_line = (
+                "I'll post publicly (mentioning you) when this is met"
+                if rule.is_public else
+                "I'll DM you when this is met"
+            )
             self._send_dm_reply(request,
                 f"Alarm set for {location_display}.\n"
                 f"Condition: {rule.describe()}\n"
-                f"I'll DM you when this is met (cooldown: {int(rule.cooldown_hours)}h).\n\n"
+                f"{notify_line} (cooldown: {int(rule.cooldown_hours)}h).\n\n"
                 f"Reply 'list alarms' to manage your alerts."
             )
 
@@ -469,7 +476,8 @@ class ZipWx:
             for i, r in enumerate(rules, 1):
                 loc = r.location_display or r.location_raw
                 fires = f" ({r.fire_count}x fired)" if r.fire_count else ""
-                lines.append(f"  {i}. {loc}: {r.describe()}{fires}")
+                public = " [public]" if r.is_public else ""
+                lines.append(f"  {i}. {loc}: {r.describe()}{public}{fires}")
             lines.append("\nTo change: 'edit alarm 1 to ...'  |  'delete alarm 1'  |  'clear alarms'")
             self._send_dm_reply(request, "\n".join(lines))
 
@@ -565,11 +573,13 @@ class ZipWx:
                 operator=new_rule.operator,
                 threshold=new_rule.threshold,
                 units=new_rule.units,
+                is_public=new_rule.is_public,
             )
             loc = display or new_rule.location_raw
+            public_note = " [public]" if new_rule.is_public else ""
             self._send_dm_reply(request,
                 f"Alarm #{index + 1} updated.\n"
-                f"  {loc}: {new_rule.describe()}"
+                f"  {loc}: {new_rule.describe()}{public_note}"
             )
 
         elif cmd == "clear_alarms":
@@ -596,6 +606,9 @@ class ZipWx:
                 "Weather alarms:\n"
                 "  alert me if temp hits 100     — DM when condition is met\n"
                 "  alert me if rain chance > 80% — any threshold or metric\n"
+                "  alert me publicly if ...      — public post + mention instead\n"
+                "                                   of a DM (needs an explicit\n"
+                "                                   location, e.g. 'in Denver, CO')\n"
                 "  list alarms                   — view active alarms\n"
                 "  edit alarm 1 to ...           — change an alarm's condition\n"
                 "  delete alarm 1                — remove alarm by number\n"
@@ -727,7 +740,9 @@ def _now() -> str:
 def _find_duplicate_alarm(candidate: AlarmRule, existing: list[AlarmRule]) -> Optional[AlarmRule]:
     """
     Returns the existing rule that duplicates ``candidate`` (same metric,
-    operator, threshold, and location), or None if there's no match.
+    operator, threshold, location, and public/private-ness), or None if
+    there's no match. A public and private alarm with an otherwise identical
+    condition are distinct rules, not duplicates of each other.
     """
     candidate_loc = candidate.location_raw.strip().lower()
     for rule in existing:
@@ -736,6 +751,7 @@ def _find_duplicate_alarm(candidate: AlarmRule, existing: list[AlarmRule]) -> Op
             and rule.operator == candidate.operator
             and rule.threshold == candidate.threshold
             and rule.location_raw.strip().lower() == candidate_loc
+            and rule.is_public == candidate.is_public
         ):
             return rule
     return None

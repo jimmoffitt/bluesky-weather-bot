@@ -84,6 +84,13 @@ _LOCATION_SKIP_FIRST_WORDS = frozenset(
     ["the", "a", "an", "any", "my", "your", "next", "this", "that"]
 )
 
+# ---------------------------------------------------------------------------
+# Public-post opt-in
+# "alert me publicly if ..." / "alert me if ... with post"
+# ---------------------------------------------------------------------------
+
+_PUBLIC_RE = re.compile(r'\b(publicly|with\s+post)\b', re.I)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -109,8 +116,9 @@ def parse_alarm_text(
             "Try: 'alert me if temp hits 100' or 'alert me if rain chance over 80%'"
         )
 
-    location, location_match = _find_location(text)
-    location = location or home_location
+    is_public = bool(_PUBLIC_RE.search(text))
+
+    explicit_location, location_match = _find_location(text)
     # Strip the location clause before hunting for the threshold number, so a
     # digit location (e.g. a zip code) can't be mistaken for the threshold.
     text_for_threshold = (
@@ -126,6 +134,15 @@ def parse_alarm_text(
         )
 
     operator = _detect_operator(text)
+
+    if is_public and not explicit_location:
+        return None, (
+            "Public alarms need an explicit location — I won't post your "
+            "home location publicly.\n"
+            "Example: 'alert me publicly if temp in Denver, CO hits 100'"
+        )
+
+    location = explicit_location or home_location
     if not location:
         return None, (
             "I don't know which location to watch.\n"
@@ -145,6 +162,7 @@ def parse_alarm_text(
         threshold=threshold,
         units=detected_units,
         cooldown_hours=cooldown,
+        is_public=is_public,
     )
     return rule, None
 

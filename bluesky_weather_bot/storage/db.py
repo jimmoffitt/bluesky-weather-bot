@@ -327,6 +327,9 @@ class Database:
                 threshold        REAL    NOT NULL,
                 units            TEXT    NOT NULL DEFAULT 'imperial',
                 is_active        INTEGER NOT NULL DEFAULT 1,
+                is_public        INTEGER NOT NULL DEFAULT 0,
+                -- fires as a public @mention post instead of a DM
+
                 cooldown_hours   REAL    NOT NULL DEFAULT 4.0,
                 created_at       TEXT    NOT NULL,
                 last_checked_at  TEXT,
@@ -423,6 +426,15 @@ class Database:
                 "ALTER TABLE user_prefs ADD COLUMN layout TEXT NOT NULL DEFAULT 'phone'"
             )
             logger.info("[db] Migrated: added user_prefs.layout column")
+        alarm_cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(alarm_rules)").fetchall()
+        }
+        if "is_public" not in alarm_cols:
+            self._conn.execute(
+                "ALTER TABLE alarm_rules ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("[db] Migrated: added alarm_rules.is_public column")
 
         # Always ensure the dedup index exists — safe to run on every connect
         # because source_uri is now guaranteed to be present.
@@ -851,16 +863,16 @@ class Database:
                 user_did, user_handle,
                 location_raw, location_display, location_lat, location_lon,
                 metric, operator, threshold, units,
-                is_active, cooldown_hours, created_at,
+                is_active, is_public, cooldown_hours, created_at,
                 last_checked_at, last_fired_at, fire_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 rule.user_did, rule.user_handle,
                 rule.location_raw, rule.location_display,
                 rule.location_lat, rule.location_lon,
                 rule.metric, rule.operator, rule.threshold, rule.units,
-                int(rule.is_active), rule.cooldown_hours, _now(),
+                int(rule.is_active), int(rule.is_public), rule.cooldown_hours, _now(),
                 None, None, 0,
             ),
         )
@@ -915,6 +927,7 @@ class Database:
         operator: str,
         threshold: float,
         units: str,
+        is_public: bool,
     ) -> None:
         """Overwrite a rule's condition (used by the 'edit alarm' DM command)."""
         assert self._conn
@@ -922,11 +935,12 @@ class Database:
             """UPDATE alarm_rules
                SET location_raw = ?, location_display = ?,
                    location_lat = ?, location_lon = ?,
-                   metric = ?, operator = ?, threshold = ?, units = ?
+                   metric = ?, operator = ?, threshold = ?, units = ?,
+                   is_public = ?
              WHERE id = ?""",
             (
                 location_raw, location_display, location_lat, location_lon,
-                metric, operator, threshold, units, rule_id,
+                metric, operator, threshold, units, int(is_public), rule_id,
             ),
         )
         self._conn.commit()
@@ -1175,6 +1189,7 @@ def _row_to_alarm_rule(row: dict) -> AlarmRule:
         threshold=row["threshold"],
         units=row.get("units", "imperial"),
         is_active=bool(row.get("is_active", 1)),
+        is_public=bool(row.get("is_public", 0)),
         cooldown_hours=row.get("cooldown_hours", 4.0),
         created_at=row.get("created_at"),
         last_checked_at=row.get("last_checked_at"),

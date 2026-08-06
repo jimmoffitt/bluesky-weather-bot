@@ -59,6 +59,16 @@ class TestFindDuplicateAlarm:
     def test_no_existing_rules_returns_none(self):
         assert _find_duplicate_alarm(_make_rule(), []) is None
 
+    def test_public_and_private_versions_are_not_duplicates(self):
+        existing = _make_rule(is_public=False)
+        dup = _find_duplicate_alarm(_make_rule(is_public=True), [existing])
+        assert dup is None
+
+    def test_same_public_alarm_is_a_duplicate(self):
+        existing = _make_rule(id=1, is_public=True)
+        dup = _find_duplicate_alarm(_make_rule(is_public=True), [existing])
+        assert dup is existing
+
 
 class TestAppendLatencyFooter:
     def _received_at(self, seconds_ago: float = 5.5) -> datetime:

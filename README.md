@@ -199,8 +199,25 @@ only needs to fire once a day). The background checker evaluates all active
 alarms every 15 minutes.
 
 Creating an alarm identical to one you already have (same metric, comparison,
-threshold, and location) is rejected with a pointer to the existing one,
-rather than silently creating a duplicate that'd double-fire.
+threshold, location, and public/private-ness) is rejected with a pointer to
+the existing one, rather than silently creating a duplicate that'd
+double-fire. A public and private version of the same condition are treated
+as distinct alarms, not duplicates of each other.
+
+### Public alarms
+
+Add `publicly` or `with post` to the alarm text and it fires as a public
+post that `@mentions` you, instead of a DM:
+
+```
+alert me publicly if temp hits 100 in Denver, CO
+alert me if wind exceeds 50 mph in 80501 with post
+```
+
+Public alarms **require an explicit location in the text** — they never
+fall back to your saved home location, so a fire never broadcasts where you
+live to everyone unless you named that location yourself in the alarm.
+`list alarms` marks these with `[public]`.
 
 ### Managing alarms
 

@@ -260,8 +260,10 @@ class DMAlertChannel(AlertChannel):
 
         # ---- Alarm creation ----
         # "alert me if …", "notify me when …", "send me a DM if …", etc.
+        # "publicly"/"with post" may sit between "me" and "if/when"
+        # ("alert me publicly if …") — tolerate a short optional gap there.
         _ALARM_TRIGGERS = [
-            r"^(?:alert|notify|warn)\s+me\s+(?:if|when)\b",
+            r"^(?:alert|notify|warn)\s+me\s+(?:\w+\s+){0,2}?(?:if|when)\b",
             r"^send\s+me\s+a?\s*(?:dm|message|notification)\s+(?:if|when)\b",
             r"^(?:alert|notify)\s+(?:if|when)\b",
             r"^set\s+alarm\b",

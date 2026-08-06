@@ -24,6 +24,7 @@ from bluesky_weather_bot.alarms.models import (
 )
 from bluesky_weather_bot.channels.notify.base import NotificationPayload
 from bluesky_weather_bot.channels.notify.bluesky_dm import BlueskyDMNotifyChannel
+from bluesky_weather_bot.channels.notify.bluesky_post import BlueskyPostNotifyChannel
 from bluesky_weather_bot.storage.db import Database
 from bluesky_weather_bot.weather.models import WeatherReport
 from bluesky_weather_bot.weather.service import WeatherService
@@ -40,7 +41,7 @@ class AlarmChecker:
 
     Usage::
 
-        checker = AlarmChecker(db, weather_service, dm_channel)
+        checker = AlarmChecker(db, weather_service, dm_channel, post_channel)
         checker.start()
         ...
         checker.stop()
@@ -51,11 +52,13 @@ class AlarmChecker:
         db: Database,
         weather_service: WeatherService,
         dm_channel: BlueskyDMNotifyChannel,
+        post_channel: Optional[BlueskyPostNotifyChannel] = None,
         check_interval: float = DEFAULT_CHECK_INTERVAL,
     ) -> None:
         self._db = db
         self._weather = weather_service
         self._dm = dm_channel
+        self._post = post_channel
         self._check_interval = check_interval
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -168,13 +171,19 @@ class AlarmChecker:
             return
 
         location = rule.location_display or rule.location_raw
-        message = _format_alarm_message(rule, actual_value, location)
         logger.info(
-            "[alarm] Firing rule %d for @%s — %s actual=%.1f%s",
+            "[alarm] Firing rule %d for @%s — %s actual=%.1f%s (public=%s)",
             rule.id, rule.user_handle, rule.describe(),
-            actual_value, rule.unit_label(),
+            actual_value, rule.unit_label(), rule.is_public,
         )
 
+        if rule.is_public:
+            self._fire_public(rule, actual_value, location)
+        else:
+            self._fire_dm(rule, actual_value, location)
+
+    def _fire_dm(self, rule: AlarmRule, actual_value: float, location: str) -> None:
+        message = _format_alarm_message(rule, actual_value, location)
         payload = NotificationPayload(
             request_db_id=None,
             post_thread=[message],
@@ -186,6 +195,31 @@ class AlarmChecker:
             self._db.update_alarm_fired(rule.id)
         else:
             logger.error("[alarm] DM failed for rule %d: %s", rule.id, result.error)
+
+    def _fire_public(self, rule: AlarmRule, actual_value: float, location: str) -> None:
+        if self._post is None:
+            logger.error(
+                "[alarm] Rule %d is public but no post channel is configured — "
+                "skipping this cycle, will retry.", rule.id,
+            )
+            return
+
+        from atproto import client_utils
+
+        mention_text = f"@{rule.user_handle}" if rule.user_handle else "Hey"
+        body = _format_public_alarm_body(rule, actual_value, location)
+        text_builder = client_utils.TextBuilder().mention(mention_text, rule.user_did).text(body)
+
+        payload = NotificationPayload(
+            request_db_id=None,
+            post_thread=[text_builder],
+            target_channel="bluesky_post",
+        )
+        result = self._post.send(payload)
+        if result.success:
+            self._db.update_alarm_fired(rule.id)
+        else:
+            logger.error("[alarm] Public post failed for rule %d: %s", rule.id, result.error)
 
 
 # ---------------------------------------------------------------------------
@@ -255,4 +289,20 @@ def _format_alarm_message(rule: AlarmRule, actual_value: float, location: str) -
         f"Your condition: {rule.describe()}\n"
         f"\n"
         f"Reply 'list alarms' to manage your alerts."
+    )
+
+
+def _format_public_alarm_body(rule: AlarmRule, actual_value: float, location: str) -> str:
+    """
+    Text appended after the @mention in a public alarm post. Deliberately
+    shorter than the DM version — no "reply to manage" footer, since that
+    instruction only makes sense in a DM thread with the bot.
+    """
+    unit = rule.unit_label()
+    metric_label = METRIC_LABELS.get(rule.metric, rule.metric).capitalize()
+
+    return (
+        f" — Weather Alert for {location}: "
+        f"{metric_label} is {actual_value:.1f}{unit} "
+        f"({rule.describe()})."
     )

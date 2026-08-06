@@ -117,6 +117,8 @@ class TestExtractCommandAlarms:
         "send me a dm if wind exceeds 50 mph",
         "set alarm temp hits 100",
         "add alarm temp hits 100",
+        "alert me publicly if temp in Denver, CO hits 100",
+        "alert me with post if temp in Denver, CO hits 100",
     ])
     def test_set_alarm(self, text):
         assert DMAlertChannel._extract_command(text) == "set_alarm"
