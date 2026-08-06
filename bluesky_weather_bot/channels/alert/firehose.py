@@ -23,6 +23,7 @@ Dependencies: pip install atproto
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -199,22 +200,39 @@ class FirehoseAlertChannel(AlertChannel):
         def watchdog() -> None:
             """
             client.start() can wedge without raising or invoking on_error —
-            observed after repeated 'ConsumerTooSlow' disconnects, where the
-            thread goes silent forever with no further log output. Force a
-            reconnect if the firehose (normally near-constant traffic) has
-            gone quiet for longer than any real lull would explain.
+            observed live even after recreating the client on reconnect: the
+            new socket reaches ESTABLISHED and keeps receiving bytes (visible
+            in `ss` as a growing Recv-Q) but on_message never fires, so
+            in-process recovery can't be trusted to actually work. Force a
+            reconnect on the first stale detection; if traffic still hasn't
+            resumed by the next check, escalate to killing the whole process
+            so systemd's Restart=on-failure brings it back fully clean —
+            every full restart so far has fixed it immediately, so that's
+            the one recovery path known to actually work.
             """
+            consecutive_stale = 0
             while not self._stop_event.wait(timeout=self._WATCHDOG_CHECK_INTERVAL_SEC):
                 idle = time.monotonic() - self._last_message_at
-                if idle > self._WATCHDOG_IDLE_SEC:
-                    logger.warning(
-                        "[firehose] No messages for %.0fs — forcing reconnect", idle
+                if idle <= self._WATCHDOG_IDLE_SEC:
+                    consecutive_stale = 0
+                    continue
+
+                consecutive_stale += 1
+                if consecutive_stale >= 2:
+                    logger.error(
+                        "[firehose] Still no messages %.0fs after a forced "
+                        "reconnect — restarting the process.", idle,
                     )
-                    self._last_message_at = time.monotonic()
-                    try:
-                        client.stop()
-                    except Exception:
-                        pass
+                    os._exit(1)
+
+                logger.warning(
+                    "[firehose] No messages for %.0fs — forcing reconnect", idle
+                )
+                self._last_message_at = time.monotonic()
+                try:
+                    client.stop()
+                except Exception:
+                    pass
 
         threading.Thread(target=watchdog, name="FirehoseWatchdog", daemon=True).start()
 
