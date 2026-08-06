@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from typing import Optional
 
 from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest
@@ -71,6 +72,14 @@ class FirehoseAlertChannel(AlertChannel):
 
     CHANNEL_NAME = "firehose"
 
+    # The public firehose is extremely high-volume — under normal operation
+    # on_message fires many times a second. If a connection has gone this
+    # long without a single message, the underlying client has silently
+    # wedged (observed after repeated 'ConsumerTooSlow' disconnects) rather
+    # than there simply being no traffic, so the watchdog force-reconnects.
+    _WATCHDOG_IDLE_SEC = 45.0
+    _WATCHDOG_CHECK_INTERVAL_SEC = 15.0
+
     def __init__(self, settings: Settings) -> None:
         super().__init__()
         self._bot_handle = settings.bluesky_handle.lower().lstrip("@")
@@ -79,6 +88,7 @@ class FirehoseAlertChannel(AlertChannel):
         self._thread: Optional[threading.Thread] = None
         self._seen_uris: set[str] = set()
         self._seen_lock = threading.Lock()
+        self._last_message_at = time.monotonic()
 
     # ------------------------------------------------------------------
     # AlertChannel interface
@@ -124,6 +134,7 @@ class FirehoseAlertChannel(AlertChannel):
         client = FirehoseSubscribeReposClient()
 
         def on_message(message: MessageFrame) -> None:
+            self._last_message_at = time.monotonic()
             if self._stop_event.is_set():
                 client.stop()
                 return
@@ -178,14 +189,41 @@ class FirehoseAlertChannel(AlertChannel):
                 return
             logger.warning("[firehose] Connection error: %s — will reconnect", error)
 
+        def watchdog() -> None:
+            """
+            client.start() can wedge without raising or invoking on_error —
+            observed after repeated 'ConsumerTooSlow' disconnects, where the
+            thread goes silent forever with no further log output. Force a
+            reconnect if the firehose (normally near-constant traffic) has
+            gone quiet for longer than any real lull would explain.
+            """
+            while not self._stop_event.wait(timeout=self._WATCHDOG_CHECK_INTERVAL_SEC):
+                idle = time.monotonic() - self._last_message_at
+                if idle > self._WATCHDOG_IDLE_SEC:
+                    logger.warning(
+                        "[firehose] No messages for %.0fs — forcing reconnect", idle
+                    )
+                    self._last_message_at = time.monotonic()
+                    try:
+                        client.stop()
+                    except Exception:
+                        pass
+
+        threading.Thread(target=watchdog, name="FirehoseWatchdog", daemon=True).start()
+
         while not self._stop_event.is_set():
+            self._last_message_at = time.monotonic()
             try:
                 client.start(on_message, on_error)
             except Exception as exc:
                 if self._stop_event.is_set():
                     break
                 logger.warning("[firehose] Reconnecting after error: %s", exc)
-                self._stop_event.wait(timeout=5)
+            else:
+                if self._stop_event.is_set():
+                    break
+                logger.warning("[firehose] Connection ended — reconnecting")
+            self._stop_event.wait(timeout=5)
 
     @staticmethod
     def _resolve_bot_did(handle: str) -> Optional[str]:
