@@ -1,22 +1,82 @@
-# bluesky_weather_bot
+# ZipWx — bluesky_weather_bot
 
 A modular Bluesky bot that responds to weather requests from public posts,
-direct messages, and file-based alerts. Reply with a portrait image card
-or a 3-post text thread — your choice.
+direct messages, and file-based alerts, and can proactively DM you when a
+weather condition you care about is met.
+
+This doc has two parts: the **[User's Guide](#users-guide)** covers what the
+bot does and how to talk to it; the **[Developer's Guide](#developers-guide)**
+covers how it's built, how to run it, and how to deploy it.
+
+---
+
+# User's Guide
+
+## What it does
+
+- **Ask for weather** — mention it publicly, DM it, or drop a file in its
+  inbox — and get back an image card or a text thread.
+- **Add `/forecast` or `/day`** to a request to get the 12-hour/7-day forecast
+  card or the "on this day" historical chart alongside the default current-
+  conditions reply.
+- **Set weather alarms** over DM in plain English ("alert me if temp hits
+  100") and get proactively DMed when the condition is met.
+- **Personalize** your home location, display units, and image layout — once
+  set, they apply to every future request on any channel.
+
+## Triggering the bot
+
+| Method | Example |
+|--------|---------|
+| Public post — mention + zip | `@zipwx.bsky.social 80501` |
+| Public post — mention + city | `@zipwx.bsky.social Denver, CO` |
+| Public post — mention + city only | `@zipwx.bsky.social Portland` *(returns results for all matches)* |
+| Direct message — zip or city | `80501` or `Denver, CO` or `Portland` |
+| Direct message — home location | *(no text needed — uses your saved home location)* |
+| File inbox | Drop a YAML file into `inbox/` |
+
+The bot replies to the original post (public) or sends a DM response. Image
+mode is used for public replies; DMs always use the text thread format since
+Bluesky DMs do not support image attachments.
+
+## Directives — `/forecast` and `/day`
+
+By default a request gets back just the current-conditions card (or, in text
+mode, just the current-conditions post) — this keeps the common case fast.
+Add either directive anywhere in your message to opt into more:
+
+| Directive | Adds |
+|-----------|------|
+| `/forecast` | The 12-hour + 7-day forecast card |
+| `/day` | The "on this day" historical temperature chart |
+
+```
+@zipwx.bsky.social 80501 /forecast
+@zipwx.bsky.social 80501 /forecast /day
+```
+
+Both work together and can appear anywhere in the message; the location is
+still parsed correctly around them. `/day` in particular is worth opting into
+rather than defaulting on — the historical chart is backed by a ~75-year
+archive query that's by far the slowest part of building a reply.
 
 ## What it looks like
 
-**Image mode** (`POST_MODE=image`) — up to 3 PNG cards posted as a reply:
+**Image mode** (`POST_MODE=image`) — up to 3 PNG cards, gated by the
+directives above:
 
-| Current conditions | Forecast | On This Day |
+| Current conditions (default) | + `/forecast` | + `/day` |
 |---|---|---|
-| <img src="docs/screenshot_image_card.png" width="220" alt="Current conditions card"> | <img src="docs/screenshot_forecast_card.png" width="220" alt="12-hour and 7-day forecast card"> | <img src="docs/screenshot_historical_card.png" width="220" alt="On this day historical temperature chart"> |
+| <img src="docs/screenshot_image_card.png" width="180" alt="Current conditions card"> | <img src="docs/screenshot_forecast_card.png" width="220" alt="12-hour and 7-day forecast card"> | <img src="docs/screenshot_historical_card.png" width="220" alt="On this day historical temperature chart"> |
 
-- **Card 1** — current conditions: temp, feels-like, humidity, wind, gusts, pressure, sunrise/sunset
-- **Card 2** — 12-hour hourly + 7-day daily forecast
-- **Card 3** — "On this day" ERA5 temperature history (75 years), record high/low, averages
+- **Card 1** — current conditions: temp, feels-like, sunrise/sunset,
+  humidity, wind, gusts, precip, pressure. Sized for a vertical phone screen.
+- **Card 2** (`/forecast`) — 12-hour hourly + 7-day daily forecast
+- **Card 3** (`/day`) — "On this day" ERA5 temperature history (~75 years),
+  record high/low, averages, with a legend for the highlighted bars
 
-**Text mode** (`POST_MODE=text`) — a 3-post thread (also used for DM replies):
+**Text mode** (`POST_MODE=text`) — a post thread (also used for DM replies;
+`/forecast`/`/day` have no effect here — DMs always get the full thread):
 
 ```
 📍 New York, NY | Sat Mar 14 10:15 PM EDT
@@ -42,49 +102,12 @@ Last year (Mar 14, 2025):
   Hi 57°F (14°C) / Lo 38°F (3°C) | Precip 0.14in
 ```
 
-## Quick start
-
-```bash
-# 1. Clone and set up environment
-cd ~/projects/bluesky_weather_bot
-python3 -m venv .venv && source .venv/bin/activate
-pip3 install -r requirements.txt
-
-# 2. Configure credentials
-cp .local.env.example .local.env
-# Edit .local.env — set BSKY_HANDLE, BSKY_APP_PASSWORD, and POST_MODE
-
-# 3. Run (single instance — do not start multiple)
-python3 main.py
-```
-
-> **Note:** Always ensure only one instance is running. Multiple processes each
-> respond to every incoming post, resulting in duplicate replies.
-
-## Triggering the bot
-
-Users trigger the bot by:
-
-| Method | Example |
-|--------|---------|
-| Public post — mention + zip | `@zipwx.bsky.social 80501` |
-| Public post — mention + city | `@zipwx.bsky.social Denver, CO` |
-| Public post — mention + city only | `@zipwx.bsky.social Portland` *(returns results for all matches)* |
-| Direct message — zip or city | `80501` or `Denver, CO` or `Portland` |
-| Direct message — home location | *(no text needed — uses your saved home location)* |
-| File inbox | Drop a YAML file into `inbox/` |
-
-The bot replies to the original post (public) or sends a DM response. Image
-mode is used for public replies; DMs always use the text thread format since
-Bluesky DMs do not support image attachments.
-
 ## Personalizing via DM
 
-Users can configure their experience by sending commands directly to the bot via
-Bluesky DM. Changes are stored per-user and apply to all future responses on
-any channel.
+Send commands directly to the bot via Bluesky DM. Changes are stored per-user
+and apply to all future responses on any channel.
 
-<img src="docs/screenshot_help_card.png" width="400" alt="ZipWx DM command reference card">
+<img src="docs/screenshot_help_card.png" width="360" alt="ZipWx DM command reference card">
 
 ### Weather requests
 
@@ -104,10 +127,11 @@ your home weather automatically.
 ```
 set home Denver, CO      ← save by city
 set home 80501           ← save by ZIP
-clear home               ← remove saved location
+clear home                ← remove saved location
 ```
 
-The bot validates the location before saving.
+The bot validates the location before saving. Your home location is also the
+fallback location for weather alarms that don't name one explicitly.
 
 ### Display units
 
@@ -119,47 +143,80 @@ controls which appears first.
 | `imperial` | °F · mph · inches first (default) |
 | `metric` | °C · km/h · mm first |
 
-Aliases: `use imperial`, `fahrenheit`, `use metric`, `celsius`,
-`set units imperial`, `set units metric`.
+Aliases: `use imperial`, `fahrenheit`, `set units imperial` · `use metric`,
+`celsius`, `set units metric`.
+
+### Image layout
+
+Only affects public replies in image mode (DMs are always text).
+
+| Command | Effect |
+|---------|--------|
+| `phone` | Portrait cards sized for a phone screen (default) |
+| `desktop` | Landscape cards sized for a monitor |
+
+Aliases: `mobile`, `portrait` for phone · `laptop`, `wide` for desktop.
 
 ### Account commands
 
 | Command | Effect |
 |---------|--------|
-| `settings` | Show your current units and home location |
+| `settings` | Show your current units, layout, and home location |
 | `reset` | Clear all preferences and return to defaults |
 | `help` or `?` | Show the command reference card |
 
-## Configuration
+## Weather alarms
 
-All settings are loaded from `.local.env` (gitignored). Copy
-`.local.env.example` to get started.
+Register a plain-English condition over DM, and the bot DMs you the moment
+it's next observed true.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BSKY_HANDLE` | *(required)* | Your bot's Bluesky handle |
-| `BSKY_APP_PASSWORD` | *(required)* | App password from Bluesky settings |
-| `POST_MODE` | `text` | `text` — 3-post thread; `image` — up to 3 PNG cards |
-| `SERVER_TYPE` | `laptop` | Shown in latency footer: `laptop` or `Pi` |
-| `SKIP_HISTORICAL` | `false` | Skip archive API calls — faster, useful during development |
-| `WEATHER_CACHE_TTL_MINUTES` | `30` | How long to cache current conditions lookups |
-| `DB_PATH` | `data/zipwx.db` | SQLite database path — point to USB drive on Pi for better I/O |
-| `INBOX_PATH` | `inbox` | Directory watched for YAML alert files |
-| `INBOX_ARCHIVE_PATH` | `inbox/archive` | Processed YAML files moved here |
-| `INBOX_ERROR_PATH` | `inbox/errors` | Unparseable YAML files moved here |
-| `INBOX_POLL_INTERVAL_SEC` | `5.0` | How often to check the inbox directory |
-| `LOG_PATH` | `logs/zipwx.log` | Log file path |
-| `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-
-### Image mode dependencies
-
-`POST_MODE=image` requires Pillow:
-
-```bash
-pip3 install Pillow
+```
+alert me if temp hits 100
+notify me when rain chance over 80%
+alert me if wind exceeds 50 mph
+alert me if temp in Denver, CO drops below 20
+send me a dm if forecast high hits 95
 ```
 
-If Pillow is missing the bot logs a warning and falls back to text mode automatically.
+**Supported metrics:** current temperature, forecast daily high, forecast
+daily low, precipitation probability, wind speed.
+
+**Supported comparisons:** `hits` / `reaches` / `above` / `over` / `exceeds`
+/ `or higher` (≥) · `drops below` / `falls below` / `below` / `under` /
+`less than` (<) · `drops to` / `falls to` / `or lower` / `or less` /
+`at most` (≤).
+
+**Location** is optional in the alarm text — name one explicitly (`in
+Denver, CO`, `in 80501`) or it falls back to your saved home location. If
+neither is available, the bot asks you to set one.
+
+**Units** are inferred from what you type (`100F`, `38C`, `50mph`) or fall
+back to your saved display-units preference.
+
+**Cooldown** between repeat DMs for the same alarm is 4 hours for
+current-conditions alarms, 24 hours for forecast alarms (a forecast alarm
+only needs to fire once a day). The background checker evaluates all active
+alarms every 15 minutes.
+
+Creating an alarm identical to one you already have (same metric, comparison,
+threshold, and location) is rejected with a pointer to the existing one,
+rather than silently creating a duplicate that'd double-fire.
+
+### Managing alarms
+
+```
+list alarms                              ← view active alarms, with fire counts
+edit alarm 1 to alert if temp hits 90    ← change an existing alarm's condition
+delete alarm 1                           ← remove one alarm by number
+clear alarms                             ← remove all of your alarms
+```
+
+`list alarms` numbers your alarms in the order they were created — that
+number is what `edit alarm N` / `delete alarm N` refer to.
+
+---
+
+# Developer's Guide
 
 ## Architecture
 
@@ -170,12 +227,19 @@ FileWatcherAlertChannel    ──┐
 FirehoseAlertChannel       ──┼──▶  ZipWx (orchestrator)  ──▶  BlueskyPostNotifyChannel
 DMAlertChannel             ──┘         │                  ──▶  BlueskyDMNotifyChannel
                                        ▼
-                                  WeatherService
-                                  (Open-Meteo API, free)
-                                       ▼
-                                    Database
+                                  WeatherService  ──▶  AlarmChecker (background thread)
+                                  (Open-Meteo API, free)      │
+                                       ▼                      ▼
+                                    Database  ◀────────────────
                                    (SQLite WAL)
 ```
+
+Every inbound request becomes an `AlertRequest` (channel-agnostic: a public
+mention, a DM, and a file-drop all normalize to the same shape) and is
+handed to `ZipWx`, which resolves the location, calls `WeatherService`,
+formats a reply, and hands it to whichever `NotificationChannel` the source
+channel routes to. `AlarmChecker` runs independently on a timer, reusing the
+same `WeatherService` and `Database`.
 
 **Adding a new alert channel** (e.g. webhooks):
 1. Create `channels/alert/webhook.py` subclassing `AlertChannel`
@@ -196,11 +260,17 @@ bluesky_weather_bot/
 ├── bot.py                           # orchestrator (ZipWx + build_bot())
 ├── requirements.txt
 ├── .local.env.example               # copy to .local.env
+├── weather-bot.service              # example systemd unit (generic placeholders)
 │
 ├── bluesky_weather_bot/
+│   ├── alarms/
+│   │   ├── models.py                # AlarmRule dataclass, supported metrics/operators
+│   │   ├── parser.py                # natural-language alarm text → AlarmRule
+│   │   └── checker.py               # AlarmChecker background thread
+│   │
 │   ├── channels/
 │   │   ├── alert/
-│   │   │   ├── base.py              # AlertChannel ABC + AlertRequest dataclass
+│   │   │   ├── base.py              # AlertChannel ABC, AlertRequest, extract_directives()
 │   │   │   ├── file_watcher.py      # YAML inbox watcher
 │   │   │   ├── firehose.py          # Bluesky public post stream
 │   │   │   └── dm_poller.py         # Bluesky Direct Messages
@@ -218,13 +288,13 @@ bluesky_weather_bot/
 │   │   └── service.py               # WeatherService facade (single entry point)
 │   │
 │   ├── storage/
-│   │   └── db.py                    # SQLite: weather_cache, requests, responses
+│   │   └── db.py                    # SQLite: weather_cache, requests, responses, alarm_rules, user_prefs
 │   │
 │   └── config/
 │       └── settings.py              # loads .local.env → Settings dataclass
 │
 ├── docs/                            # screenshots and assets
-├── tests/                           # pytest suite
+├── tests/                           # pytest suite (mirrors package structure)
 ├── data/                            # SQLite database (gitignored)
 ├── inbox/                           # YAML alert files drop here
 │   ├── archive/                     # processed files moved here
@@ -232,65 +302,100 @@ bluesky_weather_bot/
 └── logs/                            # log files (gitignored)
 ```
 
-## Running as a system service
-
-On Linux (Raspberry Pi, Ubuntu, Debian), you can run the bot as a `systemd`
-service so it starts automatically on boot and restarts on failure.
-
-**1. Create the unit file:**
+## Local setup
 
 ```bash
-sudo nano /etc/systemd/system/weather-bot.service
+# 1. Clone and set up environment
+git clone https://github.com/jimmoffitt/bluesky-weather-bot.git
+cd bluesky-weather-bot
+python3 -m venv .venv && source .venv/bin/activate
+pip3 install -r requirements.txt
+
+# 2. Configure credentials
+cp .local.env.example .local.env
+# Edit .local.env — set BSKY_HANDLE, BSKY_APP_PASSWORD, and POST_MODE
+
+# 3. Run (single instance — do not start multiple)
+python3 main.py
 ```
 
-```ini
-[Unit]
-Description=Bluesky Weather Bot
-After=network-online.target
-Wants=network-online.target
+> **Note:** Always ensure only one instance is running against the same
+> Bluesky account. Multiple processes each respond to every incoming post,
+> resulting in duplicate replies.
 
-[Service]
-Type=simple
-User=YOUR_USER
-WorkingDirectory=/path/to/bluesky-weather-bot
-EnvironmentFile=/path/to/bluesky-weather-bot/.local.env
-ExecStart=/path/to/bluesky-weather-bot/.venv/bin/python3 main.py
-Restart=on-failure
-RestartSec=10
+### Image mode dependencies
 
-[Install]
-WantedBy=multi-user.target
-```
+`POST_MODE=image` needs Pillow — already in `requirements.txt` (marked
+optional there, but installed by the same `pip3 install -r requirements.txt`
+above). If it ends up missing anyway, the bot logs a warning and falls back
+to text mode automatically rather than failing to start. `matplotlib` is
+also listed in `requirements.txt` but isn't actually imported anywhere in
+`image_formatter.py` — every card, including the `/day` chart, is drawn with
+plain Pillow.
 
-Replace `YOUR_USER` and `/path/to/bluesky-weather-bot` with your actual
-username and project directory.
+## Configuration
 
-**2. Enable and start:**
+All settings are loaded from `.local.env` (gitignored). Copy
+`.local.env.example` to get started.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BSKY_HANDLE` | *(required)* | Your bot's Bluesky handle |
+| `BSKY_APP_PASSWORD` | *(required)* | App password from Bluesky settings |
+| `POST_MODE` | `text` | `text` — post thread; `image` — up to 3 PNG cards |
+| `SERVER_TYPE` | `laptop` | Shown in latency footer. `Pi` gets a specific "Raspberry Pi running in my basement" phrasing; any other value is shown verbatim as "a {value}." |
+| `SKIP_HISTORICAL` | `false` | Skip the year-ago/10-yr-avg archive call — faster, useful during development |
+| `WEATHER_CACHE_TTL_MINUTES` | `30` | How long to cache current conditions lookups |
+| `DB_PATH` | `data/zipwx.db` | SQLite database path — point to USB drive on Pi for better I/O |
+| `INBOX_PATH` | `inbox` | Directory watched for YAML alert files |
+| `INBOX_ARCHIVE_PATH` | `inbox/archive` | Processed YAML files moved here |
+| `INBOX_ERROR_PATH` | `inbox/errors` | Unparseable YAML files moved here |
+| `INBOX_POLL_INTERVAL_SEC` | `5.0` | How often to check the inbox directory |
+| `LOG_PATH` | `logs/zipwx.log` | Log file path |
+| `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+
+## Testing
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable weather-bot
-sudo systemctl start weather-bot
+# Unit tests only (no network, no credentials) — the normal day-to-day run
+.venv/bin/python3 -m pytest -m "not integration and not live"
+
+# Include integration tests (hits live Open-Meteo, no Bluesky credentials needed)
+.venv/bin/python3 -m pytest -m "not live"
+
+# Everything, including tests that send real Bluesky posts/DMs
+# (needs BSKY_HANDLE + BSKY_APP_PASSWORD in .local.env)
+.venv/bin/python3 -m pytest
 ```
 
-**3. Check status and logs:**
+The suite mirrors the package layout (`tests/test_alarms/`,
+`tests/test_channels/`, `tests/test_weather/`, plus `tests/test_bot.py` for
+`bot.py`'s pure helper functions). Image-formatter tests are skipped
+automatically if Pillow or matplotlib aren't importable (the test file
+guards on both, even though only Pillow is actually used by the code under
+test).
 
-```bash
-sudo systemctl status weather-bot
-journalctl -u weather-bot -f       # follow live logs
-journalctl -u weather-bot -n 100   # last 100 lines
-```
+## Weather data
 
-**4. Stop or restart:**
+Powered by [Open-Meteo](https://open-meteo.com/) — free, no API key required.
 
-```bash
-sudo systemctl stop weather-bot
-sudo systemctl restart weather-bot
-```
+- **Current**: temp, feels-like, humidity, wind, gusts, cloud cover,
+  pressure, visibility, sunrise/sunset
+- **Forecast**: next 12 hours hourly + 7-day daily (temp, precip
+  probability, wind, cloud cover) — same API call as current conditions, so
+  the `/forecast` directive costs nothing extra to fetch, only to render
+- **Historical comparison**: same date last year + 10-year climatological
+  average (used by the text-mode thread's third post). Fetched on every
+  cache-miss lookup unless `SKIP_HISTORICAL=true`
+- **On this day**: ERA5 reanalysis — ~75 years of daily high/low for the
+  current date, record high/low, averages. This is its own, separately
+  cached archive query (`this_day_history_cache` table, keyed by location +
+  month/day) and is only fetched when a request includes `/day` — it's by
+  far the slowest single call in the whole pipeline (a full historical range
+  query), which is why it isn't fetched by default.
 
-> **Important:** `ExecStart` must point to the venv's `python3` directly
-> (not `python` or the system Python) so all dependencies are available.
-> See the note in [Quick start](#quick-start) about using the correct interpreter.
+All values shown in dual units (°F/°C, mph/km/h, in/mm). Display order is
+user-configurable via DM — see [Display units](#display-units).
 
 ## Inbox YAML format
 
@@ -305,14 +410,80 @@ tags:
 mentions:
 ```
 
-## Weather data
+## Deploying on a Raspberry Pi
 
-Powered by [Open-Meteo](https://open-meteo.com/) — free, no API key required.
+The bot runs well on a Pi as an always-on `systemd` service — this is the
+reference deployment.
 
-- **Current**: temp, feels-like, humidity, wind, gusts, cloud cover, pressure, visibility, sunrise/sunset
-- **Forecast**: next 12 hours hourly + 7-day daily (temp, precip probability, wind, cloud cover)
-- **Historical comparison**: same date last year + 10-year climatological average
-- **On this day**: ERA5 reanalysis — ~75 years of daily high/low for the current date, record high/low, averages (cached annually per location)
+### 1. Clone and set up
 
-All values shown in dual units (°F/°C, mph/km/h, in/mm). Display order is
-user-configurable via DM — see [Personalizing via DM](#personalizing-via-dm).
+```bash
+cd ~/projects
+git clone https://github.com/jimmoffitt/bluesky-weather-bot.git
+cd bluesky-weather-bot
+python3 -m venv venv && source venv/bin/activate
+pip3 install -r requirements.txt   # Pillow for image mode is already in here
+cp .local.env.example .local.env
+# edit .local.env: BSKY_HANDLE, BSKY_APP_PASSWORD, POST_MODE=image, SERVER_TYPE=Pi
+```
+
+### 2. Install the systemd unit
+
+`weather-bot.service` is checked into the repo as a **generic example** —
+`User=pi`, `WorkingDirectory=/home/projects/bluesky_weather_bot`. Copy it and
+substitute your actual username and clone path (a real deployment's paths
+are personal to that machine and intentionally aren't hardcoded into the
+tracked file):
+
+```bash
+sudo cp weather-bot.service /etc/systemd/system/weather-bot.service
+sudo nano /etc/systemd/system/weather-bot.service   # fix User= and the three paths
+sudo systemctl daemon-reload
+sudo systemctl enable --now weather-bot
+```
+
+> **Important:** `ExecStart` must point at the venv's `python` directly (not
+> the system Python) so all dependencies are available.
+
+### 3. Operating it
+
+```bash
+sudo systemctl status weather-bot
+sudo journalctl -u weather-bot -f       # follow live logs
+sudo journalctl -u weather-bot -n 100   # last 100 lines
+
+sudo systemctl restart weather-bot
+sudo systemctl stop weather-bot
+```
+
+### 4. Deploying updates
+
+The Pi is just a git clone — ship a change by pushing to `main` and pulling
+on the Pi, then restarting:
+
+```bash
+git pull --ff-only origin main
+sudo systemctl restart weather-bot
+```
+
+Restarting typically takes 25-45 seconds to reach "running" (Bluesky auth +
+DM backlog catch-up) — check `journalctl -u weather-bot -f` for the
+`ZipWx running.` line rather than judging it dead from a `systemctl status`
+that lands mid-startup.
+
+### Operational notes specific to running on a Pi
+
+- **The firehose connection can silently wedge.** The public firehose
+  (`FirehoseAlertChannel`) occasionally hits a `ConsumerTooSlow` disconnect
+  from Bluesky's relay; a watchdog thread force-reconnects if no traffic is
+  seen for 45s, and escalates to killing the whole process (letting
+  `Restart=on-failure` bring it back clean) if that reconnect doesn't
+  actually restore traffic within one more check. This is a known rough edge
+  in how the connection recovers, not something you need to intervene in —
+  but if public replies stop working, a `sudo systemctl restart weather-bot`
+  is always a safe first move.
+- **`.local.env` is gitignored and never committed** — confirmed clean across
+  this repo's entire history. Verify on any new clone with
+  `git log --all -- .local.env` (should print nothing).
+- **WAL-mode SQLite tolerates the abrupt restarts above fine** — no special
+  shutdown handling needed.
