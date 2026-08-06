@@ -205,6 +205,34 @@ class TestCaption:
         _, _, caption = WeatherImageFormatter().format_images(report)
         assert "#" in caption
 
+    def test_caption_mentions_directives_when_neither_requested(self):
+        report = _make_report()
+        _, _, caption = WeatherImageFormatter().format_images(report)
+        assert "/forecast" in caption
+        assert "/day" in caption
+        assert "second image" not in caption.lower()
+
+    def test_caption_does_not_mention_directives_when_forecast_requested(self):
+        report = _make_report()
+        _, _, caption = WeatherImageFormatter().format_images(report, include_forecast=True)
+        assert "/forecast" not in caption
+        assert "image 2" in caption.lower()
+
+    def test_caption_reflects_actual_day_card_even_if_requested_but_unavailable(self):
+        # include_day=True but no this_day_history data → day card isn't
+        # actually rendered, so the caption shouldn't claim it exists.
+        report = _make_report(this_day_history=[])
+        _, _, caption = WeatherImageFormatter().format_images(report, include_day=True)
+        assert "Add /forecast or /day for more." in caption
+
+    def test_caption_mentions_both_images_when_both_requested(self):
+        report = _make_report(this_day_history=_make_this_day_history())
+        _, _, caption = WeatherImageFormatter().format_images(
+            report, include_forecast=True, include_day=True
+        )
+        assert "image 2" in caption.lower()
+        assert "image 3" in caption.lower()
+
 
 # ---------------------------------------------------------------------------
 # _render_this_day_card edge cases

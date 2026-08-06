@@ -421,12 +421,13 @@ class WeatherImageFormatter:
             images.append(card2)
             alts.append(self._alt_forecast_card(report))
 
-        if include_day and report.this_day_history:
+        day_included = include_day and bool(report.this_day_history)
+        if day_included:
             card3 = self._render_this_day_card(report)
             images.append(card3)
             alts.append(self._alt_this_day_card(report))
 
-        caption = self._caption(report)
+        caption = self._caption(report, include_forecast=include_forecast, include_day=day_included)
         return images, alts, caption
 
     # ------------------------------------------------------------------
@@ -1395,7 +1396,9 @@ class WeatherImageFormatter:
     # Caption and alt texts
     # ------------------------------------------------------------------
 
-    def _caption(self, report: WeatherReport) -> str:
+    def _caption(
+        self, report: WeatherReport, include_forecast: bool = False, include_day: bool = False
+    ) -> str:
         import re
         c   = report.current
         loc = report.location.display_name
@@ -1406,12 +1409,22 @@ class WeatherImageFormatter:
         m = re.search(r',\s*([A-Z]{2})\b', loc)
         if m:
             tags = f" #{m.group(1)}Wx"
+
+        if include_forecast and include_day:
+            tail = "See image 2 for the forecast, image 3 for history."
+        elif include_forecast:
+            tail = "See image 2 for the forecast."
+        elif include_day:
+            tail = "See image 2 for history."
+        else:
+            tail = "Add /forecast or /day for more."
+
         text = (
             f"{loc}: {c.weather_description}, "
             f"{c.temperature_f:.0f}F ({c.temperature_c:.0f}C), "
             f"humidity {c.humidity_pct:.0f}%, "
             f"wind {c.wind_speed_mph:.0f}mph {cardinal}.{tags}"
-            f"\n\nSee second image for forecast."
+            f"\n\n{tail}"
         )
         return text[:300]
 

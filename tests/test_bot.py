@@ -5,7 +5,9 @@ which needs live channel wiring to construct).
 
 from __future__ import annotations
 
-from bot import _find_duplicate_alarm
+from datetime import datetime, timedelta
+
+from bot import _append_latency_footer, _find_duplicate_alarm
 from bluesky_weather_bot.alarms.models import AlarmRule
 
 
@@ -56,3 +58,25 @@ class TestFindDuplicateAlarm:
 
     def test_no_existing_rules_returns_none(self):
         assert _find_duplicate_alarm(_make_rule(), []) is None
+
+
+class TestAppendLatencyFooter:
+    def _received_at(self, seconds_ago: float = 5.5) -> datetime:
+        return datetime.utcnow() - timedelta(seconds=seconds_ago)
+
+    def test_pi_gets_basement_description(self):
+        posts = ["weather text"]
+        _append_latency_footer(posts, self._received_at(), server_type="Pi")
+        assert "a Raspberry Pi running in my basement" in posts[-1]
+        assert "seconds from" in posts[-1]
+
+    def test_unknown_server_type_falls_back_to_generic_phrasing(self):
+        posts = ["weather text"]
+        _append_latency_footer(posts, self._received_at(), server_type="laptop")
+        assert "a laptop" in posts[-1]
+        assert "seconds from" in posts[-1]
+
+    def test_skips_when_footer_would_exceed_300_chars(self):
+        posts = ["x" * 295]
+        _append_latency_footer(posts, self._received_at(), server_type="Pi")
+        assert posts[-1] == "x" * 295
