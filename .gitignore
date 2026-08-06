@@ -26,6 +26,8 @@ data/
 logs/
 inbox/archive/
 inbox/errors/
+nohup.out
+*.out
 
 # IDE
 .vscode/
