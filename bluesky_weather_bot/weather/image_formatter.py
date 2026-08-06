@@ -496,10 +496,13 @@ class WeatherImageFormatter:
 
     def _render_current_card(self, report: WeatherReport, units: str = "imperial") -> bytes:
         # Portrait layout — optimised for phone viewing
-        W      = 900
-        H      = 900
-        H_HDR  = 76    # header strip — single row: location · timestamp · badge
-        TEMP_H = 170   # snug: just enough for temp row + FEELS LIKE
+        W       = 900
+        H_HDR   = 76    # header strip — single row: location · timestamp · badge
+        TEMP_H  = 170   # snug: just enough for temp row + FEELS LIKE
+        ROW_H   = 78    # fixed per-stat-row height (icon box is 46px + padding)
+        N_ROWS  = 6
+        BOTTOM_MARGIN = 12
+        H = H_HDR + TEMP_H + ROW_H * N_ROWS + BOTTOM_MARGIN
 
         img, draw = _new_card(W, H)
 
@@ -600,7 +603,6 @@ class WeatherImageFormatter:
 
         # ── Stats rows — single row per metric ────────────────────────────────
         STATS_Y0 = H_HDR + TEMP_H
-        ROW_H    = (H - STATS_Y0) // 6
 
         f_lbl = _font_mono(32)
         f_pri = _font_mono(37, medium=True)
@@ -709,8 +711,11 @@ class WeatherImageFormatter:
 
     def _render_current_card_desktop(self, report: WeatherReport, units: str = "imperial") -> bytes:
         W      = 1200
-        H      = 600
         H_HDR  = 76
+        ROW_H  = 78    # fixed per-stat-row height, matches the portrait card
+        N_ROWS = 6
+        BOTTOM_MARGIN = 12
+        H = H_HDR + ROW_H * N_ROWS + BOTTOM_MARGIN
         LEFT_W = 520      # left column: temperature display
         STAT_X = LEFT_W + 40  # right column stats start
 
@@ -759,11 +764,16 @@ class WeatherImageFormatter:
         nw = nb[2] - nb[0]; n_bot = nb[3]
         uw = ub[2] - ub[0]; cw    = cb[2] - cb[0]
 
-        feels_h   = 18 + 8
-        content_h = n_bot + 10 + feels_h
-        # Reserve 70px at bottom of left column for sunrise/sunset
-        avail_h   = H - H_HDR - 70
-        ty        = H_HDR + max(8, (avail_h - content_h) // 2)
+        today_slot = (report.daily_forecast.slots[0]
+                      if report.daily_forecast.slots else None)
+        has_sun = bool(today_slot and (today_slot.sunrise or today_slot.sunset))
+
+        feels_h    = 18 + 8
+        content_h  = n_bot + 10 + feels_h
+        SUN_GAP    = 36    # space between "FEELS LIKE" and the sunrise/sunset row
+        SUN_ROW_H  = 34    # visual height of the sunrise/sunset row itself
+        total_h    = content_h + (SUN_GAP + SUN_ROW_H if has_sun else 0)
+        ty         = H_HDR + max(8, (H - H_HDR - total_h) // 2)
 
         GAP_TC  = 32
         total_w = nw + 4 + uw + GAP_TC + cw + (tub[2] - tub[0])
@@ -780,14 +790,13 @@ class WeatherImageFormatter:
         fx = max(8, (LEFT_W - (fb[2] - fb[0])) // 2)
         draw.text((fx, baseline + 10), feels_str, font=_font_mono(27), fill=TEXT_MUT)
 
-        # ── Sunrise / Sunset — bottom of left column ──────────────────────────
-        today_slot = (report.daily_forecast.slots[0]
-                      if report.daily_forecast.slots else None)
-        if today_slot and (today_slot.sunrise or today_slot.sunset):
+        # ── Sunrise / Sunset — directly below FEELS LIKE, not pinned to the
+        # bottom, so the whole left-column group stays vertically centered ──
+        if has_sun:
             f_sun_lbl  = _font_mono(14)
             f_sun_time = _font_mono(17, medium=True)
             icon_r = 11
-            sun_y  = H - 38
+            sun_y  = baseline + 10 + feels_h + SUN_GAP + SUN_ROW_H // 2
             sr_x   = LEFT_W // 4 - 20
             ss_x   = LEFT_W * 3 // 4 - 20
 
@@ -809,7 +818,6 @@ class WeatherImageFormatter:
                 draw.text((text_x, sun_y + 2), time_str, font=f_sun_time, fill=TEXT_PRI)
 
         # ── Right column: stats rows ───────────────────────────────────────────
-        ROW_H  = (H - H_HDR) // 6
         f_lbl  = _font_mono(32)
         f_pri  = _font_mono(37, medium=True)
         f_sec  = _font_mono(29)
@@ -1010,8 +1018,9 @@ class WeatherImageFormatter:
                 bar_top_bg = bar_bot - bar_max_h
                 bx1 = cx - bar_w // 2
                 bx2 = cx + bar_w // 2
-                draw.rounded_rectangle([(bx1, bar_top_bg), (bx2, bar_bot)],
-                                        radius=3, fill=_hex_to_rgb(SEP))
+                if pct > 0:
+                    draw.rounded_rectangle([(bx1, bar_top_bg), (bx2, bar_bot)],
+                                            radius=3, fill=_hex_to_rgb(SEP))
                 fill_h = int(bar_max_h * min(pct, 100.0) / 100.0)
                 if fill_h >= 2:
                     draw.rounded_rectangle(
@@ -1258,8 +1267,9 @@ class WeatherImageFormatter:
                 bar_w     = max(6, col_w - 16)
                 bar_bot   = row_y + H_HR_ROW - 16
                 bx1 = cx - bar_w // 2; bx2 = cx + bar_w // 2
-                draw.rounded_rectangle([(bx1, bar_bot - bar_max_h), (bx2, bar_bot)],
-                                        radius=3, fill=_hex_to_rgb(SEP))
+                if pct > 0:
+                    draw.rounded_rectangle([(bx1, bar_bot - bar_max_h), (bx2, bar_bot)],
+                                            radius=3, fill=_hex_to_rgb(SEP))
                 fill_h = int(bar_max_h * min(pct, 100.0) / 100.0)
                 if fill_h >= 2:
                     draw.rounded_rectangle([(bx1, bar_bot - fill_h), (bx2, bar_bot)],
@@ -1539,12 +1549,19 @@ class WeatherImageFormatter:
                             fill=_hex_to_rgb(color))
 
         # --- X-axis year labels (every 10 years) ---
+        # Centered under their bar with a short tick, since a 4-digit label
+        # is wider than a single bar — without the tick + centering it reads
+        # as pointing at a gap between bars rather than one specific year.
         f_yr = _font_mono(12)
         for rec in records:
             if rec.date.year % 10 == 0:
-                i   = years.index(rec.date.year)
-                bx  = cx1 + i * (bar_w + gap)
-                draw.text((bx - 4, cy2 + 4), str(rec.date.year),
+                i        = years.index(rec.date.year)
+                bar_cx   = cx1 + i * (bar_w + gap) + bar_w // 2
+                draw.line([(bar_cx, cy2 + 2), (bar_cx, cy2 + 6)],
+                           fill=_hex_to_rgb(TEXT_MUT), width=1)
+                lbl = str(rec.date.year)
+                lb  = draw.textbbox((0, 0), lbl, font=f_yr)
+                draw.text((bar_cx - (lb[2] - lb[0]) // 2, cy2 + 9), lbl,
                           font=f_yr, fill=TEXT_MUT)
 
         # --- Stats block ---
@@ -1553,17 +1570,35 @@ class WeatherImageFormatter:
         f_val   = _font_syne(18)
         f_small = _font_mono(13)
 
-        def _stat(x, y, label, value, color=TEXT_PRI):
-            draw.text((x, y),      label, font=f_lbl,  fill=TEXT_MUT)
-            draw.text((x, y + 20), value, font=f_val,  fill=_hex_to_rgb(color))
+        def _stat(x, y, label, value, color=TEXT_PRI, swatch=None, swatch_kind="dot"):
+            # swatch echoes the chart mark this stat corresponds to — a dot
+            # for a record-year bar, a short line for an avg reference line —
+            # so the stats block doubles as the chart's legend.
+            lx = x
+            if swatch:
+                sc = _hex_to_rgb(swatch)
+                sw_cy = y + 6
+                if swatch_kind == "dot":
+                    r = 4
+                    draw.ellipse([(x, sw_cy - r), (x + 2 * r, sw_cy + r)], fill=sc)
+                    lx = x + 2 * r + 7
+                else:
+                    draw.line([(x, sw_cy), (x + 12, sw_cy)], fill=sc, width=2)
+                    lx = x + 12 + 7
+            draw.text((lx, y),      label, font=f_lbl,  fill=TEXT_MUT)
+            draw.text((lx, y + 20), value, font=f_val,  fill=_hex_to_rgb(color))
 
         col1 = MARGIN
         col2 = W // 2
 
-        _stat(col1, sy,      "RECORD HIGH", f"{rec_high:.0f}°F  ({rec_high_yr})", AMBER)
-        _stat(col2, sy,      "RECORD LOW",  f"{rec_low:.0f}°F  ({rec_low_yr})",   BLUE)
-        _stat(col1, sy + 56, "AVG HIGH",    f"{avg_high:.0f}°F")
-        _stat(col2, sy + 56, "AVG LOW",     f"{avg_low:.0f}°F")
+        _stat(col1, sy,      "RECORD HIGH", f"{rec_high:.0f}°F  ({rec_high_yr})", AMBER,
+              swatch=AMBER, swatch_kind="dot")
+        _stat(col2, sy,      "RECORD LOW",  f"{rec_low:.0f}°F  ({rec_low_yr})",   BLUE,
+              swatch=BLUE, swatch_kind="dot")
+        _stat(col1, sy + 56, "AVG HIGH",    f"{avg_high:.0f}°F",
+              swatch=AMBER, swatch_kind="line")
+        _stat(col2, sy + 56, "AVG LOW",     f"{avg_low:.0f}°F",
+              swatch=BLUE, swatch_kind="line")
 
         # Year span note
         yr_note = f"{years[0]}–{years[-1]}  ({n_years} years)"

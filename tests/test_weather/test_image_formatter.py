@@ -168,7 +168,17 @@ class TestPngValidity:
         report = _make_report()
         images, _, _ = WeatherImageFormatter().format_images(report)
         pil_img = PILImage.open(io.BytesIO(images[0]))
-        assert pil_img.size == (900, 900)
+        # Height is fit tightly to content (header + temp block + 6 stat
+        # rows), not a fixed square — this pins the exact computed value so a
+        # future change to row/header sizing is a deliberate, visible diff.
+        assert pil_img.size == (900, 726)
+
+    def test_current_card_desktop_dimensions(self):
+        report = _make_report()
+        pil_img = PILImage.open(io.BytesIO(
+            WeatherImageFormatter()._render_current_card_desktop(report)
+        ))
+        assert pil_img.size == (1200, 556)
 
     def test_this_day_card_dimensions(self):
         report = _make_report(this_day_history=_make_this_day_history())
