@@ -25,6 +25,8 @@ from bluesky_weather_bot.weather.models import (
     Forecast,
     HistoricalComparison,
     DailyHistoricalRecord,
+    DailyForecast,
+    DailyForecastSlot,
 )
 
 # ``report.historical`` (year-ago/10-yr-avg comparison) is unrelated to the
@@ -168,10 +170,12 @@ class TestPngValidity:
         report = _make_report()
         images, _, _ = WeatherImageFormatter().format_images(report)
         pil_img = PILImage.open(io.BytesIO(images[0]))
-        # Height is fit tightly to content (header + temp block + 6 stat
-        # rows), not a fixed square — this pins the exact computed value so a
-        # future change to row/header sizing is a deliberate, visible diff.
-        assert pil_img.size == (900, 726)
+        # Narrow + tall (vertical phone proportions) rather than square, and
+        # fit tightly to content (header + temp block + 6 stat rows, no
+        # sunrise/sunset row since the fixture has no daily_forecast slot) —
+        # this pins the exact computed value so a future change to row/header
+        # sizing is a deliberate, visible diff.
+        assert pil_img.size == (640, 844)
 
     def test_current_card_desktop_dimensions(self):
         report = _make_report()
@@ -179,6 +183,27 @@ class TestPngValidity:
             WeatherImageFormatter()._render_current_card_desktop(report)
         ))
         assert pil_img.size == (1200, 556)
+
+    def test_current_card_gains_a_row_and_height_with_sunrise_data(self):
+        report = _make_report()
+        report.daily_forecast = DailyForecast(slots=[
+            DailyForecastSlot(
+                date=datetime(2025, 3, 10),
+                temp_max_f=60.0, temp_max_c=15.6,
+                temp_min_f=38.0, temp_min_c=3.3,
+                precipitation_probability_max_pct=10.0,
+                precipitation_in=0.0, precipitation_mm=0.0,
+                wind_speed_max_mph=15.0, wind_speed_max_kph=24.1,
+                weather_description="Partly cloudy",
+                sunrise=datetime(2025, 3, 10, 6, 30),
+                sunset=datetime(2025, 3, 10, 18, 45),
+            )
+        ])
+        pil_img = PILImage.open(io.BytesIO(
+            WeatherImageFormatter()._render_current_card(report)
+        ))
+        # One extra 92px row versus the no-sunrise-data case (640, 844).
+        assert pil_img.size == (640, 936)
 
     def test_this_day_card_dimensions(self):
         report = _make_report(this_day_history=_make_this_day_history())

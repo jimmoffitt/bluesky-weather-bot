@@ -446,10 +446,11 @@ class WeatherImageFormatter:
         Draw a single-line location + timestamp header bar consistent across all cards.
         Returns H_HDR (y position of the first content pixel below the header).
         """
-        H_HDR  = 76
-        f_loc   = _font_syne(24)
-        f_ts    = _font_mono(18)
-        f_badge = _font_syne(17)
+        H_HDR   = 76
+        compact = W < 700
+        f_loc   = _font_syne(20 if compact else 24)
+        f_ts    = _font_mono(15 if compact else 18)
+        f_badge = _font_syne(14 if compact else 17)
 
         draw.rectangle([(0, 0), (W, H_HDR - 3)], fill=_hex_to_rgb(HDR_BG))
         draw.rectangle([(0, H_HDR - 3), (W, H_HDR)], fill=_hex_to_rgb(BLUE))
@@ -495,13 +496,19 @@ class WeatherImageFormatter:
     # ------------------------------------------------------------------
 
     def _render_current_card(self, report: WeatherReport, units: str = "imperial") -> bytes:
-        # Portrait layout — optimised for phone viewing
-        W       = 900
+        # Portrait layout — optimised for phone viewing. Narrow with generous
+        # row height so the card reads as a vertical phone shape rather than
+        # square, closer to a native portrait screenshot's proportions.
+        W       = 640
         H_HDR   = 76    # header strip — single row: location · timestamp · badge
-        TEMP_H  = 170   # snug: just enough for temp row + FEELS LIKE
-        ROW_H   = 78    # fixed per-stat-row height (icon box is 46px + padding)
-        N_ROWS  = 6
-        BOTTOM_MARGIN = 12
+        TEMP_H  = 200   # room for the hero temp row + FEELS LIKE
+        ROW_H   = 92    # fixed per-stat-row height (icon box is 46px + padding)
+        BOTTOM_MARGIN = 16
+
+        today_slot = (report.daily_forecast.slots[0]
+                      if report.daily_forecast.slots else None)
+        has_sun = bool(today_slot and (today_slot.sunrise or today_slot.sunset))
+        N_ROWS  = 7 if has_sun else 6
         H = H_HDR + TEMP_H + ROW_H * N_ROWS + BOTTOM_MARGIN
 
         img, draw = _new_card(W, H)
@@ -571,35 +578,9 @@ class WeatherImageFormatter:
                        f"FEELS LIKE  {feels_val}{feels_u}",
                        _font_mono(27), TEXT_MUT, W)
 
-        # ── Sunrise / Sunset — right side of temperature block ────────────────
-        today_slot = (report.daily_forecast.slots[0]
-                      if report.daily_forecast.slots else None)
-        if today_slot and (today_slot.sunrise or today_slot.sunset):
-            f_sun_lbl  = _font_mono(14)
-            f_sun_time = _font_mono(17, medium=True)
-            icon_r     = 11
-            icon_x     = W - 155
-            text_x     = icon_x + icon_r + 14
-            row_h      = (TEMP_H - 20) // 2
-            row1_y     = H_HDR + 10 + row_h // 2
-            row2_y     = H_HDR + 10 + row_h + row_h // 2
-
-            for is_rise, slot_dt, row_y in (
-                (True,  today_slot.sunrise, row1_y),
-                (False, today_slot.sunset,  row2_y),
-            ):
-                if slot_dt is None:
-                    continue
-                _draw_icon(draw, icon_x, row_y, icon_r,
-                           "sunrise" if is_rise else "sunset",
-                           _hex_to_rgb(AMBER))
-                lbl = "RISE" if is_rise else "SET"
-                lb  = draw.textbbox((0, 0), lbl, font=f_sun_lbl)
-                draw.text((text_x, row_y - (lb[3] - lb[1]) - 1),
-                          lbl, font=f_sun_lbl, fill=TEXT_MUT)
-                time_str = slot_dt.strftime("%I:%M %p").lstrip("0")
-                draw.text((text_x, row_y + 2),
-                          time_str, font=f_sun_time, fill=TEXT_PRI)
+        # Sunrise/sunset renders as its own stat row below (not squeezed into
+        # the temp block) — the narrow card width doesn't leave room for a
+        # side-by-side column there without colliding with the °C reading.
 
         # ── Stats rows — single row per metric ────────────────────────────────
         STATS_Y0 = H_HDR + TEMP_H
@@ -644,6 +625,15 @@ class WeatherImageFormatter:
             #  f"{c.visibility_miles:.1f} mi",
             #  f"  \u00b7  {c.visibility_km:.1f} km"),
         ]
+
+        if has_sun:
+            rise_str = today_slot.sunrise.strftime("%I:%M %p").lstrip("0") if today_slot.sunrise else None
+            set_str  = today_slot.sunset.strftime("%I:%M %p").lstrip("0")  if today_slot.sunset  else None
+            if rise_str and set_str:
+                sun_pri, sun_sec = rise_str, f"  \u00b7  {set_str}"
+            else:
+                sun_pri, sun_sec = (rise_str or set_str), None
+            rows.insert(0, ("SUNRISE", "amber", "sunrise", None, sun_pri, sun_sec))
 
         for i, (label, icon_color, icon_type, bar_pct, pri_val, sec_val) in enumerate(rows):
             ry  = STATS_Y0 + i * ROW_H
