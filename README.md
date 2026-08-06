@@ -212,7 +212,13 @@ post that `@mentions` you, instead of a DM:
 ```
 alert me publicly if temp hits 100 in Denver, CO
 alert me if wind exceeds 50 mph in 80501 with post
+alert me publicly if forecast high hits 100 in Denver, CO
 ```
+
+That last one combines a forecast alarm with a public notification: it
+watches the next 7 days' daily highs (not just right now), and posts
+publicly with a mention the first time the forecast shows 100°F or higher
+for Denver, CO — checked once a day, like any forecast alarm.
 
 Public alarms **require an explicit location in the text** — they never
 fall back to your saved home location, so a fire never broadcasts where you
