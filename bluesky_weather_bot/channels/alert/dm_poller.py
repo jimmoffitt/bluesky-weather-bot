@@ -25,7 +25,7 @@ import re
 import threading
 from typing import Optional
 
-from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest
+from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest, extract_directives
 from bluesky_weather_bot.config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -145,7 +145,8 @@ class DMAlertChannel(AlertChannel):
 
                 text = getattr(msg, "text", "") or ""
                 command = self._extract_command(text)
-                raw_location = None if command else self._extract_location(text)
+                location_text, directives = extract_directives(text)
+                raw_location = None if command else self._extract_location(location_text)
 
                 # Mark seen before dispatch so a crash mid-pipeline doesn't reprocess
                 self._mark_seen(msg_id, log.convo_id)
@@ -162,6 +163,7 @@ class DMAlertChannel(AlertChannel):
                     requester_did=sender_did or None,
                     raw_location=raw_location,
                     raw_content=text,
+                    directives=directives,
                     # reply_to_uri carries convo_id so BlueskyDMNotifyChannel
                     # knows which conversation to reply to
                     reply_to_uri=log.convo_id,

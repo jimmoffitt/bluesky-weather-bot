@@ -20,12 +20,27 @@ Usage pattern (in bot.py):
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+_DIRECTIVE_RE = re.compile(r"(?:(?<=\s)|^)/(\w+)\b")
+
+
+def extract_directives(text: str) -> tuple[str, frozenset[str]]:
+    """
+    Pulls '/word' directive tokens (e.g. '/forecast', '/day') out of request
+    text before location extraction runs, so they can't be swallowed into a
+    location string. Returns (text_with_directives_removed, lowercased set
+    of directive names found).
+    """
+    directives = frozenset(m.group(1).lower() for m in _DIRECTIVE_RE.finditer(text))
+    stripped = _DIRECTIVE_RE.sub(" ", text)
+    return stripped, directives
 
 
 @dataclass
@@ -46,6 +61,10 @@ class AlertRequest:
 
     # The full original content (post text, DM text, or file contents)
     raw_content: str
+
+    # '/word' directive tokens found in the text (e.g. {'forecast', 'day'}),
+    # already stripped out of raw_location's extraction input by the channel.
+    directives: frozenset[str] = field(default_factory=frozenset)
 
     # When the request was received by the channel
     received_at: datetime = field(default_factory=datetime.utcnow)

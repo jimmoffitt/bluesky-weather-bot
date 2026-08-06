@@ -178,6 +178,19 @@ class TestCheckDMs:
         assert received[0].reply_to_uri == "convo1"
         assert received[0].source_channel == "dm"
 
+    def test_directive_extracted_and_does_not_corrupt_location(self, poller):
+        chat = self._setup(poller)
+        chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(
+            logs=[_make_log("msg1", "did:plc:user", "80501 /forecast /day", "convo1")],
+        )
+        received = []
+        poller.on_request(received.append)
+        poller._check_dms()
+
+        assert len(received) == 1
+        assert received[0].raw_location == "80501"
+        assert received[0].directives == frozenset({"forecast", "day"})
+
     def test_skips_own_messages(self, poller):
         chat = self._setup(poller, own_did="did:plc:bot")
         chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(

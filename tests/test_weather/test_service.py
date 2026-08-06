@@ -166,6 +166,43 @@ class TestMultipleLocations:
 
 
 # ---------------------------------------------------------------------------
+# this_day_history gating — the slow (~75-year archive query) path should
+# only run when a caller explicitly asks for it.
+# ---------------------------------------------------------------------------
+
+class TestDayHistoryGating:
+    def _svc(self, db, loc, report):
+        db.get_this_day_history.return_value = None  # cache miss
+        MockResolver = patch("bluesky_weather_bot.weather.service.LocationResolver").start()
+        MockClient = patch("bluesky_weather_bot.weather.service.WeatherClient").start()
+        MockResolver.return_value.resolve.return_value = [loc]
+        MockClient.return_value.fetch.return_value = report
+        MockClient.return_value.fetch_this_day_history.return_value = []
+        return WeatherService(db, skip_historical=False), MockClient
+
+    def test_not_fetched_by_default(self, db):
+        loc = _make_loc()
+        report = _make_report(loc)
+        svc, MockClient = self._svc(db, loc, report)
+        try:
+            svc.lookup("Denver, CO")
+        finally:
+            patch.stopall()
+        MockClient.return_value.fetch_this_day_history.assert_not_called()
+
+    def test_fetched_when_include_day_history_true(self, db):
+        loc = _make_loc()
+        report = _make_report(loc)
+        svc, MockClient = self._svc(db, loc, report)
+        try:
+            results = svc.lookup("Denver, CO", include_day_history=True)
+        finally:
+            patch.stopall()
+        MockClient.return_value.fetch_this_day_history.assert_called_once()
+        assert results[0].this_day_history == []
+
+
+# ---------------------------------------------------------------------------
 # Resolution failure
 # ---------------------------------------------------------------------------
 

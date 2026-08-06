@@ -396,7 +396,12 @@ class WeatherImageFormatter:
         return buf.getvalue()
 
     def format_images(
-        self, report: WeatherReport, units: str = "imperial", layout: str = "phone"
+        self,
+        report: WeatherReport,
+        units: str = "imperial",
+        layout: str = "phone",
+        include_forecast: bool = False,
+        include_day: bool = False,
     ) -> tuple[list[bytes], list[str], str]:
         images: list[bytes] = []
         alts:   list[str]   = []
@@ -408,14 +413,15 @@ class WeatherImageFormatter:
         images.append(card1)
         alts.append(self._alt_current(report))
 
-        if layout == "desktop":
-            card2 = self._render_forecast_card_desktop(report)
-        else:
-            card2 = self._render_forecast_card(report)
-        images.append(card2)
-        alts.append(self._alt_forecast_card(report))
+        if include_forecast:
+            if layout == "desktop":
+                card2 = self._render_forecast_card_desktop(report)
+            else:
+                card2 = self._render_forecast_card(report)
+            images.append(card2)
+            alts.append(self._alt_forecast_card(report))
 
-        if report.this_day_history:
+        if include_day and report.this_day_history:
             card3 = self._render_this_day_card(report)
             images.append(card3)
             alts.append(self._alt_this_day_card(report))

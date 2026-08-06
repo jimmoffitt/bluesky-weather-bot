@@ -75,10 +75,14 @@ class WeatherService:
         )
         return report
 
-    def lookup(self, raw_location: str) -> list[WeatherReport]:
+    def lookup(self, raw_location: str, include_day_history: bool = False) -> list[WeatherReport]:
         """
         Resolve raw_location to one or more coordinates, fetch (or cache-hit)
         a WeatherReport for each, and return the list.
+
+        include_day_history: whether to attach report.this_day_history (a
+        ~75-year archive query — by far the slowest part of a lookup, and
+        only needed when the caller actually plans to render/send it).
 
         Raises ValueError if the location cannot be resolved.
         """
@@ -109,7 +113,8 @@ class WeatherService:
                     report_json=_report_to_dict(report),
                 )
 
-            self._attach_this_day_history(report, loc)
+            if include_day_history:
+                self._attach_this_day_history(report, loc)
             results.append(report)
 
         return results

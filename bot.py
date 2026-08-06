@@ -242,10 +242,16 @@ class ZipWx:
             self._db.update_request_status(db_id, "complete")
             return
 
+        # Directives: '/forecast' and '/day' opt into extra images/sections —
+        # both are skipped by default since '/day' in particular (a ~75-year
+        # archive query) dominates request latency when nobody asked for it.
+        include_forecast = "forecast" in request.directives
+        include_day      = "day" in request.directives
+
         # Weather lookup
         self._db.update_request_processing_start(db_id)
         try:
-            reports = self._weather.lookup(request.raw_location)
+            reports = self._weather.lookup(request.raw_location, include_day_history=include_day)
         except ValueError as exc:
             logger.warning("[bot] Location not resolved: %s", exc)
             self._send_error_reply(request, f"Sorry, I couldn't find weather for {request.raw_location!r}.")
@@ -278,7 +284,8 @@ class ZipWx:
             )
             if use_images:
                 images, alts, caption = self._image_formatter.format_images(
-                    report, units=units, layout=layout
+                    report, units=units, layout=layout,
+                    include_forecast=include_forecast, include_day=include_day,
                 )
                 thread_posts = [caption]
                 _append_latency_footer(thread_posts, request.received_at, self._settings.server_type)
@@ -616,6 +623,9 @@ class ZipWx:
             "Examples:\n"
             "  @zipwx.bsky.social 80501\n"
             "  @zipwx.bsky.social Denver, CO\n\n"
+            "Add /forecast for the 12-hr + 7-day forecast card, "
+            "or /day for the historical \"on this day\" chart:\n"
+            "  @zipwx.bsky.social 80501 /forecast /day\n\n"
             "DM me for personalized weather and to set a home location."
         )
         images, alts = None, None

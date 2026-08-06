@@ -36,7 +36,7 @@ from typing import Optional
 
 import yaml
 
-from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest
+from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest, extract_directives
 from bluesky_weather_bot.config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,10 @@ class FileWatcherAlertChannel(AlertChannel):
         message      = str(data.get("message") or full_message)
 
         # Try to extract a location from the message text
-        raw_location = self._extract_location(full_message) or self._extract_location(message)
+        full_message_text, directives = extract_directives(full_message)
+        message_text, message_directives = extract_directives(message)
+        directives = directives | message_directives
+        raw_location = self._extract_location(full_message_text) or self._extract_location(message_text)
 
         # Parse created_at if present
         created_at_raw = data.get("created_at")
@@ -154,6 +157,7 @@ class FileWatcherAlertChannel(AlertChannel):
             requester_handle=None,
             raw_location=raw_location,
             raw_content=full_message,
+            directives=directives,
             received_at=received_at,
             source_file=path.name,
         )

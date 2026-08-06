@@ -118,3 +118,31 @@ class TestBuildRequest:
         )
         assert req is not None
         assert req.raw_location is None
+
+    def test_directive_extracted_and_does_not_corrupt_location(self, channel):
+        req = channel._build_request(
+            text="@testbot.bsky.social 80501 /forecast",
+            repo="did:plc:abc123",
+            op=self._make_op(),
+        )
+        assert req is not None
+        assert req.raw_location == "80501"
+        assert req.directives == frozenset({"forecast"})
+
+    def test_multiple_directives_extracted(self, channel):
+        req = channel._build_request(
+            text="@testbot.bsky.social Denver, CO /forecast /day",
+            repo="did:plc:abc123",
+            op=self._make_op(),
+        )
+        assert req is not None
+        assert req.raw_location == "Denver, CO"
+        assert req.directives == frozenset({"forecast", "day"})
+
+    def test_no_directives_yields_empty_set(self, channel):
+        req = channel._build_request(
+            text="@testbot.bsky.social 80501",
+            repo="did:plc:abc123",
+            op=self._make_op(),
+        )
+        assert req.directives == frozenset()

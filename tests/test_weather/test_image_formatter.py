@@ -115,21 +115,41 @@ def _make_report(
 # ---------------------------------------------------------------------------
 
 class TestImageCount:
-    def test_two_images_when_no_this_day_history(self):
-        report = _make_report(this_day_history=[])
+    def test_one_image_by_default(self):
+        """No include_forecast/include_day: just the current-conditions card."""
+        report = _make_report(this_day_history=_make_this_day_history())
         images, alts, caption = WeatherImageFormatter().format_images(report)
+        assert len(images) == 1
+        assert len(alts) == 1
+
+    def test_two_images_with_forecast_requested(self):
+        report = _make_report(this_day_history=[])
+        images, alts, caption = WeatherImageFormatter().format_images(
+            report, include_forecast=True
+        )
         assert len(images) == 2
         assert len(alts) == 2
 
-    def test_three_images_when_this_day_history_present(self):
+    def test_three_images_with_forecast_and_day_requested(self):
         report = _make_report(this_day_history=_make_this_day_history())
-        images, alts, caption = WeatherImageFormatter().format_images(report)
+        images, alts, caption = WeatherImageFormatter().format_images(
+            report, include_forecast=True, include_day=True
+        )
         assert len(images) == 3
         assert len(alts) == 3
 
+    def test_day_requested_but_no_history_data_stays_at_one_image(self):
+        report = _make_report(this_day_history=[])
+        images, alts, caption = WeatherImageFormatter().format_images(
+            report, include_day=True
+        )
+        assert len(images) == 1
+
     def test_alts_match_images(self):
         report = _make_report(this_day_history=_make_this_day_history())
-        images, alts, _ = WeatherImageFormatter().format_images(report)
+        images, alts, _ = WeatherImageFormatter().format_images(
+            report, include_forecast=True, include_day=True
+        )
         assert len(alts) == len(images)
 
 
@@ -152,7 +172,9 @@ class TestPngValidity:
 
     def test_this_day_card_dimensions(self):
         report = _make_report(this_day_history=_make_this_day_history())
-        images, _, _ = WeatherImageFormatter().format_images(report)
+        images, _, _ = WeatherImageFormatter().format_images(
+            report, include_forecast=True, include_day=True
+        )
         # Third image is the "On This Day" historical chart card
         pil_img = PILImage.open(io.BytesIO(images[2]))
         assert pil_img.size == (760, 538)
@@ -209,10 +231,14 @@ class TestThisDayCard:
 class TestEdgeCases:
     def test_single_slot_forecast_does_not_crash(self):
         report = _make_report(n_slots=1)
-        images, alts, caption = WeatherImageFormatter().format_images(report)
+        images, alts, caption = WeatherImageFormatter().format_images(
+            report, include_forecast=True
+        )
         assert len(images) >= 1
 
     def test_no_slots_forecast_does_not_crash(self):
         report = _make_report(n_slots=0)
-        images, alts, caption = WeatherImageFormatter().format_images(report)
+        images, alts, caption = WeatherImageFormatter().format_images(
+            report, include_forecast=True
+        )
         assert len(images) >= 1

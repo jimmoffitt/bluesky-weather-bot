@@ -28,7 +28,7 @@ import threading
 import time
 from typing import Optional
 
-from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest
+from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest, extract_directives
 from bluesky_weather_bot.config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -258,7 +258,8 @@ class FirehoseAlertChannel(AlertChannel):
         Extracts location from post text and builds an AlertRequest.
         Returns None if no location can be found (informational posts, etc.).
         """
-        raw_location = self._extract_location(text)
+        location_text, directives = extract_directives(text)
+        raw_location = self._extract_location(location_text)
 
         # Build the AT-URI for the reply target
         rkey = getattr(op, "path", "").split("/")[-1] if hasattr(op, "path") else ""
@@ -275,6 +276,7 @@ class FirehoseAlertChannel(AlertChannel):
             requester_did=repo,   # repo in AT Protocol firehose is the user's DID
             raw_location=raw_location,
             raw_content=text,
+            directives=directives,
             reply_to_uri=reply_uri,
             reply_to_cid=reply_cid,
         )
