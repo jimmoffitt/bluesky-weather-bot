@@ -765,7 +765,7 @@ def _find_duplicate_alarm(candidate: AlarmRule, existing: list[AlarmRule]) -> Op
 
 
 _SERVER_DESCRIPTIONS = {
-    "Pi": "a Raspberry Pi running in my basement",
+    "Pi": "a Raspberry Pi running in a basement",
 }
 
 
