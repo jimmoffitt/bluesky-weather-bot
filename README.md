@@ -1,4 +1,4 @@
-# ZipWx — bluesky_weather_bot
+# bluesky-weather-bot @ZipWx
 
 A modular Bluesky bot that responds to weather requests from public posts,
 direct messages, and file-based alerts, and can proactively DM you when a
