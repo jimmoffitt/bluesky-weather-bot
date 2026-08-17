@@ -46,6 +46,9 @@ class Settings:
     # Output mode
     post_mode: str   # "text" | "image"
 
+    # Public-mention alert backend
+    mention_backend: str   # "firehose" | "jetstream"
+
     # Server identification (shown in latency footer)
     server_type: str  # "laptop" | "Pi"
 
@@ -91,6 +94,10 @@ class Settings:
             skip_historical=opt_bool("SKIP_HISTORICAL", False),
             post_mode=opt("POST_MODE", "text").lower(),
             server_type=opt("SERVER_TYPE", "laptop"),
+            mention_backend=_req_choice(
+                opt("MENTION_BACKEND", "firehose").lower(),
+                "MENTION_BACKEND", {"firehose", "jetstream"},
+            ),
         )
 
     def ensure_directories(self) -> None:
@@ -103,6 +110,12 @@ class Settings:
             self.log_path.parent,
         ]:
             p.mkdir(parents=True, exist_ok=True)
+
+
+def _req_choice(value: str, key: str, allowed: set[str]) -> str:
+    if value not in allowed:
+        raise ConfigError(f"{key}={value!r} is not one of {sorted(allowed)}")
+    return value
 
 
 def _load_dotenv(env_file: str | Path) -> None:

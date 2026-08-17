@@ -45,6 +45,7 @@ from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest
 from bluesky_weather_bot.channels.alert.dm_poller import DMAlertChannel
 from bluesky_weather_bot.channels.alert.file_watcher import FileWatcherAlertChannel
 from bluesky_weather_bot.channels.alert.firehose import FirehoseAlertChannel
+from bluesky_weather_bot.channels.alert.jetstream import JetstreamAlertChannel
 from bluesky_weather_bot.channels.notify.base import (
     NotificationChannel, NotificationPayload,
 )
@@ -56,6 +57,12 @@ from bluesky_weather_bot.weather.formatter import WeatherFormatter
 from bluesky_weather_bot.weather.service import WeatherService
 
 logger = logging.getLogger(__name__)
+
+# Public-mention channels: FirehoseAlertChannel and JetstreamAlertChannel are
+# two interchangeable backends for the same source (public @mention posts) —
+# only one is ever registered at a time (see build_bot), but both produce
+# AlertRequests that need identical handling here.
+_MENTION_CHANNELS = ("firehose", "jetstream")
 
 
 def _try_build_image_formatter():
@@ -199,7 +206,7 @@ class ZipWx:
             raw_location=request.raw_location,
             status="pending",
             ingested_at=request.received_at.isoformat(),
-            source_uri=request.reply_to_uri if request.source_channel == "firehose" else None,
+            source_uri=request.reply_to_uri if request.source_channel in _MENTION_CHANNELS else None,
         )
         if db_id is None:
             logger.debug(
@@ -235,7 +242,7 @@ class ZipWx:
                     "  set home Denver, CO\n\n"
                     "Send 'help' for all commands."
                 ))
-            elif request.source_channel == "firehose":
+            elif request.source_channel in _MENTION_CHANNELS:
                 # Plain mention with no location and no home — ignore quietly
                 logger.debug("[bot] No location and no home for %s — ignoring",
                              request.requester_handle)
@@ -789,7 +796,14 @@ def build_bot(settings: Settings) -> ZipWx:
 
     # Alert channels
     bot.register_alert_channel(FileWatcherAlertChannel(settings))
-    bot.register_alert_channel(FirehoseAlertChannel(settings))
+    # FirehoseAlertChannel and JetstreamAlertChannel are alternate backends
+    # for the same public-mention source — only one runs at a time, so a
+    # single mention never gets two replies. Flip via MENTION_BACKEND in
+    # .local.env to A/B them (e.g. for the Pi's CPU/thermal comparison).
+    if settings.mention_backend == "jetstream":
+        bot.register_alert_channel(JetstreamAlertChannel(settings))
+    else:
+        bot.register_alert_channel(FirehoseAlertChannel(settings))
     bot.register_alert_channel(DMAlertChannel(settings, db=bot._db))
 
     # Notification channels

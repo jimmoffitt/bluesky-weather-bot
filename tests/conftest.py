@@ -47,4 +47,5 @@ def mock_settings(tmp_path):
         skip_historical=True,
         post_mode="text",
         server_type="laptop",
+        mention_backend="firehose",
     )

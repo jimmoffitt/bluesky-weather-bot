@@ -2,7 +2,8 @@
 Abstract base class for all alert channels.
 
 An AlertChannel is any input source that can trigger a weather request.
-Current implementations: FileWatcherAlertChannel, FirehoseAlertChannel, DMAlertChannel
+Current implementations: FileWatcherAlertChannel, FirehoseAlertChannel,
+                          JetstreamAlertChannel, DMAlertChannel
 Future examples:         WebhookAlertChannel, SMSAlertChannel, EmailAlertChannel
 
 Each channel produces AlertRequest objects and delivers them to a callback
@@ -50,7 +51,7 @@ class AlertRequest:
     regardless of which channel it arrived on.
     """
     # Which channel produced this request
-    source_channel: str          # "file" | "firehose" | "dm"
+    source_channel: str          # "file" | "firehose" | "jetstream" | "dm"
 
     # Who asked (Bluesky handle for social channels; None for file alerts)
     requester_handle: Optional[str]

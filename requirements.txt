@@ -13,6 +13,7 @@ timezonefinder>=6.2.0    # accurate timezone from lat/lon
 
 # Bluesky (AT Protocol)
 atproto>=0.0.46          # official Bluesky Python SDK
+websockets>=13.0         # JetstreamAlertChannel (Jetstream WebSocket client)
 
 # Image mode (optional — only needed for POST_MODE=image)
 Pillow>=10.0.0

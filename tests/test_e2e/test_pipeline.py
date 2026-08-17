@@ -48,6 +48,8 @@ def _make_settings(skip_historical: bool = True) -> Settings:
         weather_cache_ttl_minutes=30,
         skip_historical=skip_historical,
         post_mode="text",
+        server_type="laptop",
+        mention_backend="firehose",
     )
 
 
