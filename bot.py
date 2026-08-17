@@ -207,6 +207,7 @@ class ZipWx:
             status="pending",
             ingested_at=request.received_at.isoformat(),
             source_uri=request.reply_to_uri if request.source_channel in _MENTION_CHANNELS else None,
+            source_created_at=request.source_created_at,
         )
         if db_id is None:
             logger.debug(
@@ -340,7 +341,7 @@ class ZipWx:
             self._db.update_request_mark_slow(
                 db_id,
                 delivery_finished_at=delivery_finished_at,
-                source_created_at=None,  # source_created_at not yet captured from AT Protocol
+                source_created_at=request.source_created_at,
             )
         self._db.update_request_status(db_id, "complete")
 

@@ -70,6 +70,13 @@ class AlertRequest:
     # When the request was received by the channel
     received_at: datetime = field(default_factory=datetime.utcnow)
 
+    # When the underlying post was created on the AT Protocol network
+    # (the record's own createdAt) — set by firehose/jetstream channels.
+    # None for file/DM, where there's no equivalent "creation" moment
+    # distinct from receipt. This is what the receive-latency metric
+    # (ingested_at - source_created_at) is measured against.
+    source_created_at: Optional[str] = None
+
     # For firehose/DM channels: the AT-URI of the post to reply to
     reply_to_uri: Optional[str] = None
     reply_to_cid: Optional[str] = None

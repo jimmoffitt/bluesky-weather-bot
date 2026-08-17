@@ -214,7 +214,7 @@ class JetstreamAlertChannel(AlertChannel):
         if not self._is_trigger(text):
             return
 
-        request = self._build_request(text=text, did=did, commit=commit)
+        request = self._build_request(text=text, did=did, commit=commit, record=record)
         if request is None:
             return
 
@@ -233,7 +233,7 @@ class JetstreamAlertChannel(AlertChannel):
     def _is_trigger(self, text: str) -> bool:
         return f"@{self._bot_handle}" in text.lower()
 
-    def _build_request(self, text: str, did: str, commit: dict) -> Optional[AlertRequest]:
+    def _build_request(self, text: str, did: str, commit: dict, record: dict) -> Optional[AlertRequest]:
         location_text, directives = extract_directives(text)
         raw_location = self._extract_location(location_text)
 
@@ -253,6 +253,7 @@ class JetstreamAlertChannel(AlertChannel):
             directives=directives,
             reply_to_uri=reply_uri,
             reply_to_cid=reply_cid,
+            source_created_at=record.get("createdAt"),
         )
 
     @staticmethod

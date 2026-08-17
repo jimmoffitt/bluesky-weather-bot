@@ -174,6 +174,7 @@ class FirehoseAlertChannel(AlertChannel):
                             text=text,
                             repo=commit.repo,
                             op=op,
+                            created_at=record.created_at,
                         )
                         if request:
                             if request.reply_to_uri:
@@ -285,7 +286,7 @@ class FirehoseAlertChannel(AlertChannel):
         """
         return f"@{self._bot_handle}" in text.lower()
 
-    def _build_request(self, text: str, repo: str, op) -> Optional[AlertRequest]:
+    def _build_request(self, text: str, repo: str, op, created_at: Optional[str] = None) -> Optional[AlertRequest]:
         """
         Extracts location from post text and builds an AlertRequest.
         Returns None if no location can be found (informational posts, etc.).
@@ -311,6 +312,7 @@ class FirehoseAlertChannel(AlertChannel):
             directives=directives,
             reply_to_uri=reply_uri,
             reply_to_cid=reply_cid,
+            source_created_at=created_at,
         )
 
     @staticmethod
