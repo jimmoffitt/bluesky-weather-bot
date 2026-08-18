@@ -798,12 +798,17 @@ def build_bot(settings: Settings) -> ZipWx:
     # Alert channels
     bot.register_alert_channel(FileWatcherAlertChannel(settings))
     # FirehoseAlertChannel and JetstreamAlertChannel are alternate backends
-    # for the same public-mention source — only one runs at a time, so a
-    # single mention never gets two replies. Flip via MENTION_BACKEND in
-    # .local.env to A/B them (e.g. for the Pi's CPU/thermal comparison).
-    if settings.mention_backend == "jetstream":
+    # for the same public-mention source. MENTION_BACKEND in .local.env
+    # selects "firehose", "jetstream", or "both" — when both are registered,
+    # the same real post reaches both channels and each builds an identical
+    # source_uri, so the requests table's UNIQUE index on source_uri makes
+    # the second INSERT a no-op (see save_request/_handle_request's db_id is
+    # None check) and only one reply ever gets sent. Running both lets you
+    # compare which one detects a given post first without risking a
+    # double-reply.
+    if settings.mention_backend in ("jetstream", "both"):
         bot.register_alert_channel(JetstreamAlertChannel(settings))
-    else:
+    if settings.mention_backend in ("firehose", "both"):
         bot.register_alert_channel(FirehoseAlertChannel(settings))
     bot.register_alert_channel(DMAlertChannel(settings, db=bot._db))
 

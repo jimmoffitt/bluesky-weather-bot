@@ -47,7 +47,7 @@ class Settings:
     post_mode: str   # "text" | "image"
 
     # Public-mention alert backend
-    mention_backend: str   # "firehose" | "jetstream"
+    mention_backend: str   # "firehose" | "jetstream" | "both"
 
     # Server identification (shown in latency footer)
     server_type: str  # "laptop" | "Pi"
@@ -96,7 +96,7 @@ class Settings:
             server_type=opt("SERVER_TYPE", "laptop"),
             mention_backend=_req_choice(
                 opt("MENTION_BACKEND", "firehose").lower(),
-                "MENTION_BACKEND", {"firehose", "jetstream"},
+                "MENTION_BACKEND", {"firehose", "jetstream", "both"},
             ),
         )
 
