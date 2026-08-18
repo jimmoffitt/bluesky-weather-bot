@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -30,6 +31,47 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 _DIRECTIVE_RE = re.compile(r"(?:(?<=\s)|^)/(\w+)\b")
+
+
+class ThreadCPUSampler:
+    """
+    Periodically logs the CPU usage of *the thread that calls it* — for
+    comparing channels like FirehoseAlertChannel and JetstreamAlertChannel
+    that each run their message-processing loop on one dedicated thread.
+
+    systemd/top only give whole-process CPU, which is useless once two
+    channels share a process (e.g. MENTION_BACKEND=firehose,jetstream) —
+    this uses time.thread_time(), which is scoped to the calling thread,
+    so each channel's number is its own regardless of what else is running
+    in the process.
+
+    Must be constructed AND sampled from the same thread — construct it as
+    the first thing inside the channel's run loop (not in __init__, which
+    runs on whichever thread called the constructor), then call sample()
+    from inside the loop wherever messages are already being handled (no
+    separate timer thread needed).
+    """
+
+    def __init__(self, interval_sec: float = 300.0) -> None:
+        self._interval = interval_sec
+        self._last_wall = time.monotonic()
+        self._last_cpu = time.thread_time()
+
+    def sample(self, tag: str) -> None:
+        """Call frequently (e.g. once per message handled); logs at most once per interval."""
+        now_wall = time.monotonic()
+        elapsed_wall = now_wall - self._last_wall
+        if elapsed_wall < self._interval:
+            return
+        now_cpu = time.thread_time()
+        elapsed_cpu = now_cpu - self._last_cpu
+        pct = (elapsed_cpu / elapsed_wall * 100) if elapsed_wall > 0 else 0.0
+        logger.info(
+            "[%s] Thread CPU: %.1f%% over last %.1fs (%.2fs of CPU time)",
+            tag, pct, elapsed_wall, elapsed_cpu,
+        )
+        self._last_wall = now_wall
+        self._last_cpu = now_cpu
 
 
 def extract_directives(text: str) -> tuple[str, frozenset[str]]:

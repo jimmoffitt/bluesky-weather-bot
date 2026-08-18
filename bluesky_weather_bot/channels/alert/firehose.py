@@ -29,7 +29,9 @@ import threading
 import time
 from typing import Optional
 
-from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest, extract_directives
+from bluesky_weather_bot.channels.alert.base import (
+    AlertChannel, AlertRequest, ThreadCPUSampler, extract_directives,
+)
 from bluesky_weather_bot.config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -139,9 +141,14 @@ class FirehoseAlertChannel(AlertChannel):
         # via `ss`) instead of cleanly reconnecting. client.stop() is still
         # used to release whichever client is currently active.
         client: Optional["FirehoseSubscribeReposClient"] = None
+        # Constructed here (not __init__) so time.thread_time() below is
+        # scoped to this listener thread, not whichever thread built the
+        # channel — see ThreadCPUSampler's docstring.
+        cpu_sampler = ThreadCPUSampler()
 
         def on_message(message: MessageFrame) -> None:
             self._last_message_at = time.monotonic()
+            cpu_sampler.sample("firehose")
             if self._stop_event.is_set():
                 if client is not None:
                     client.stop()

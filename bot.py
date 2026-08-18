@@ -265,6 +265,7 @@ class ZipWx:
         include_day      = "day" in request.directives
 
         # Weather lookup
+        t_lookup_start = time.monotonic()
         self._db.update_request_processing_start(db_id)
         try:
             reports = self._weather.lookup(request.raw_location, include_day_history=include_day)
@@ -278,6 +279,8 @@ class ZipWx:
             self._send_error_reply(request, "Sorry, weather data is temporarily unavailable.")
             self._db.update_request_status(db_id, "error")
             return
+
+        t_lookup_done = time.monotonic()
 
         # Look up user preferences (units + layout; applies to all channels)
         units  = "imperial"
@@ -327,8 +330,10 @@ class ZipWx:
                     target_channel=target_channel,
                 )
             delivery_started_at = _now()
+            t_delivery_start = time.monotonic()
             result = self._deliver(payload)
             delivery_finished_at = _now()
+            t_delivery_end = time.monotonic()
 
             # Log response
             for i, text in enumerate(thread_posts):
@@ -348,6 +353,9 @@ class ZipWx:
                 db_id,
                 delivery_finished_at=delivery_finished_at,
                 source_created_at=request.source_created_at,
+            )
+            _log_request_latency(
+                request, t_lookup_start, t_lookup_done, t_delivery_start, t_delivery_end,
             )
         self._db.update_request_status(db_id, "complete")
 
@@ -749,6 +757,46 @@ class ZipWx:
 
 def _now() -> str:
     return datetime.utcnow().isoformat()
+
+
+def _log_request_latency(
+    request: AlertRequest,
+    t_lookup_start: float,
+    t_lookup_done: float,
+    t_delivery_start: float,
+    t_delivery_end: float,
+) -> None:
+    """
+    Logs one structured line per completed request breaking latency down by
+    phase, tagged by source_channel — the point is comparing channels (e.g.
+    firehose vs jetstream) directly in the logs without a DB query. All
+    phase durations use time.monotonic() (immune to clock adjustments);
+    only receive_sec compares against source_created_at, which is wall-clock
+    time from the AT Protocol record, so it alone can be negative or "n/a"
+    if that field is missing (file/DM channels) or clocks disagree.
+    """
+    receive_sec: Optional[float] = None
+    if request.source_created_at:
+        try:
+            created = datetime.fromisoformat(request.source_created_at.replace("Z", "+00:00"))
+            received = request.received_at.replace(tzinfo=created.tzinfo)
+            receive_sec = (received - created).total_seconds()
+        except ValueError:
+            pass
+
+    lookup_sec   = t_lookup_done - t_lookup_start
+    delivery_sec = t_delivery_end - t_delivery_start
+    total_sec    = t_delivery_end - t_lookup_start
+    if receive_sec is not None:
+        total_sec += receive_sec
+
+    logger.info(
+        "[bot] Latency channel=%s receive=%s lookup=%.2fs delivery=%.2fs total=%s",
+        request.source_channel,
+        f"{receive_sec:.3f}s" if receive_sec is not None else "n/a",
+        lookup_sec, delivery_sec,
+        f"{total_sec:.2f}s" if receive_sec is not None else "n/a",
+    )
 
 
 def _find_duplicate_alarm(candidate: AlarmRule, existing: list[AlarmRule]) -> Optional[AlarmRule]:

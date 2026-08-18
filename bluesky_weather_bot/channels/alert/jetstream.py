@@ -29,7 +29,9 @@ import threading
 import time
 from typing import Optional
 
-from bluesky_weather_bot.channels.alert.base import AlertChannel, AlertRequest, extract_directives
+from bluesky_weather_bot.channels.alert.base import (
+    AlertChannel, AlertRequest, ThreadCPUSampler, extract_directives,
+)
 from bluesky_weather_bot.channels.alert.firehose import (
     _CITY_ST_RE,
     _LOCATION_RE,
@@ -81,6 +83,8 @@ class JetstreamAlertChannel(AlertChannel):
         # instead, so a watchdog-triggered reconnect doesn't drop traffic.
         self._cursor: Optional[int] = None
         self._active_ws = None
+        # Built in _run() itself, not here — see ThreadCPUSampler's docstring.
+        self._cpu_sampler: Optional[ThreadCPUSampler] = None
 
     # ------------------------------------------------------------------
     # AlertChannel interface
@@ -117,6 +121,10 @@ class JetstreamAlertChannel(AlertChannel):
             logger.info("[jetstream] websockets installed — retrying import")
             import websockets
 
+        # Constructed here (not __init__) so time.thread_time() in
+        # _handle_message is scoped to this listener thread, not whichever
+        # thread built the channel — see ThreadCPUSampler's docstring.
+        self._cpu_sampler = ThreadCPUSampler()
         asyncio.run(self._async_main(websockets))
 
     def _build_url(self) -> str:
@@ -187,6 +195,7 @@ class JetstreamAlertChannel(AlertChannel):
                     pass
 
     def _handle_message(self, raw: str) -> None:
+        self._cpu_sampler.sample("jetstream")
         try:
             evt = json.loads(raw)
         except (ValueError, TypeError) as exc:
