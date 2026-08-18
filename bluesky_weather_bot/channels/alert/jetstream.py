@@ -13,8 +13,9 @@ filtering upstream. Built as a side-by-side comparison to
 FirehoseAlertChannel so the two can be measured against each other (CPU,
 thermal) on the Pi before deciding whether to switch.
 
-Trigger detection and location parsing are identical to FirehoseAlertChannel
-— see that module's docstring for the pattern examples.
+Trigger detection and location extraction are shared with
+FirehoseAlertChannel — see mention_parsing.py for the parsing rules and
+pattern examples.
 
 Dependencies: pip install websockets
 """
@@ -32,11 +33,9 @@ from typing import Optional
 from bluesky_weather_bot.channels.alert.base import (
     AlertChannel, AlertRequest, ThreadCPUSampler, extract_directives,
 )
-from bluesky_weather_bot.channels.alert.firehose import (
-    _CITY_ST_RE,
-    _LOCATION_RE,
-    _ZIP_RE,
-    FirehoseAlertChannel,
+from bluesky_weather_bot.channels.alert.firehose import FirehoseAlertChannel
+from bluesky_weather_bot.channels.alert.mention_parsing import (
+    extract_location, is_mention_trigger,
 )
 from bluesky_weather_bot.config.settings import Settings
 
@@ -240,7 +239,7 @@ class JetstreamAlertChannel(AlertChannel):
         self._dispatch(request)
 
     def _is_trigger(self, text: str) -> bool:
-        return f"@{self._bot_handle}" in text.lower()
+        return is_mention_trigger(text, self._bot_handle)
 
     def _build_request(self, text: str, did: str, commit: dict, record: dict) -> Optional[AlertRequest]:
         location_text, directives = extract_directives(text)
@@ -267,18 +266,6 @@ class JetstreamAlertChannel(AlertChannel):
 
     @staticmethod
     def _extract_location(text: str) -> Optional[str]:
-        m = _LOCATION_RE.search(text)
-        if m:
-            candidate = m.group(1).strip()
-            if candidate:
-                return candidate
-
-        zip_m = _ZIP_RE.search(text)
-        if zip_m:
-            return zip_m.group(1)
-
-        city_m = _CITY_ST_RE.search(text)
-        if city_m:
-            return f"{city_m.group(1).strip()}, {city_m.group(2)}"
-
-        return None
+        """Extracts a location from anywhere in the message text — see
+        mention_parsing.extract_location for the priority order."""
+        return extract_location(text)

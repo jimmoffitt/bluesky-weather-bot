@@ -5,17 +5,9 @@ Connects to the Bluesky AT Protocol firehose (com.atproto.sync.subscribeRepos)
 and streams all public posts in real time. Posts that match the configured
 trigger patterns are parsed for a location and dispatched as AlertRequests.
 
-Trigger detection:
-  Post must @mention the bot handle. A location token is not required —
-  if absent, bot.py will use the user's saved home location (or silently
-  drop the request if none is set).
-
-Pattern examples the parser handles:
-  "@zipwx.bsky.social 80501"
-  "@zipwx.bsky.social Denver, CO"
-  "@zipwx.bsky.social Portland"   ← ambiguous; resolver will return both
-  "weather for Denver? @zipwx.bsky.social"
-  "@zipwx.bsky.social"            ← plain mention → uses saved home location
+Trigger detection and location extraction are shared with
+JetstreamAlertChannel — see mention_parsing.py for the parsing rules and
+pattern examples.
 
 Dependencies: pip install atproto
 """
@@ -24,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import threading
 import time
 from typing import Optional
@@ -32,39 +23,12 @@ from typing import Optional
 from bluesky_weather_bot.channels.alert.base import (
     AlertChannel, AlertRequest, ThreadCPUSampler, extract_directives,
 )
+from bluesky_weather_bot.channels.alert.mention_parsing import (
+    extract_location, is_mention_trigger,
+)
 from bluesky_weather_bot.config.settings import Settings
 
 logger = logging.getLogger(__name__)
-
-# Regex to find a location token after the trigger word/mention.
-# Captures: 5-digit zip, or "City, ST", or a bare city name as fallback.
-_LOCATION_RE = re.compile(
-    r"(?:@\S+)"                  # trigger: mention
-    r"\s+"                       # whitespace separator
-    r"([A-Za-z0-9][^#@\n]{2,40}?)(?:\s*#|\s*@|$)",  # location token
-    re.IGNORECASE,
-)
-
-_ZIP_RE     = re.compile(r"\b(\d{5})\b")
-_CITY_ST_RE = re.compile(r"\b([A-Z][a-zA-Z\s]{2,20}),\s*([A-Z]{2})\b")
-
-# Build a regex from top-200 city names for bare-city matching.
-# Sorted longest-first so "New York" matches before "York".
-def _build_city_re() -> re.Pattern:
-    try:
-        from bluesky_weather_bot.archive.cities import TOP_200
-        names = sorted(
-            {c.name.split(",")[0].strip() for c in TOP_200},
-            key=len,
-            reverse=True,
-        )
-        pattern = r"\b(?:" + "|".join(re.escape(n) for n in names) + r")\b"
-        return re.compile(pattern, re.IGNORECASE)
-    except Exception:
-        # Fallback: never matches — zip/city-ST still work
-        return re.compile(r"(?!)")
-
-_KNOWN_CITY_RE = _build_city_re()
 
 
 class FirehoseAlertChannel(AlertChannel):
@@ -291,7 +255,7 @@ class FirehoseAlertChannel(AlertChannel):
         A plain mention (no location) is still dispatched — bot.py will apply
         the user's saved home location, or silently drop if none is set.
         """
-        return f"@{self._bot_handle}" in text.lower()
+        return is_mention_trigger(text, self._bot_handle)
 
     def _build_request(self, text: str, repo: str, op, created_at: Optional[str] = None) -> Optional[AlertRequest]:
         """
@@ -324,29 +288,6 @@ class FirehoseAlertChannel(AlertChannel):
 
     @staticmethod
     def _extract_location(text: str) -> Optional[str]:
-        """
-        Extracts location from text following a #ZipWx trigger or mention.
-
-        Priority:
-          1. Text immediately after trigger tag/mention
-          2. Zip code anywhere in text
-          3. City, ST pattern anywhere in text
-        """
-        # Try location immediately after trigger
-        m = _LOCATION_RE.search(text)
-        if m:
-            candidate = m.group(1).strip()
-            if candidate:
-                return candidate
-
-        # Zip code fallback
-        zip_m = _ZIP_RE.search(text)
-        if zip_m:
-            return zip_m.group(1)
-
-        # City, ST fallback
-        city_m = _CITY_ST_RE.search(text)
-        if city_m:
-            return f"{city_m.group(1).strip()}, {city_m.group(2)}"
-
-        return None
+        """Extracts a location from anywhere in the message text — see
+        mention_parsing.extract_location for the priority order."""
+        return extract_location(text)
