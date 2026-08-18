@@ -58,11 +58,17 @@ from bluesky_weather_bot.weather.service import WeatherService
 
 logger = logging.getLogger(__name__)
 
-# Public-mention channels: FirehoseAlertChannel and JetstreamAlertChannel are
-# two interchangeable backends for the same source (public @mention posts) —
-# only one is ever registered at a time (see build_bot), but both produce
-# AlertRequests that need identical handling here.
-_MENTION_CHANNELS = ("firehose", "jetstream")
+# Public-mention backends: interchangeable channel implementations for the
+# same source (public @mention posts), selected via MENTION_BACKEND in
+# .local.env (comma-delimited — e.g. "firehose,jetstream" to run several at
+# once). All produce AlertRequests that need identical handling below. Add a
+# new backend by adding one entry here — build_bot() and the routing checks
+# below don't need to change.
+_MENTION_BACKEND_CHANNELS = {
+    "firehose":  FirehoseAlertChannel,
+    "jetstream": JetstreamAlertChannel,
+}
+_MENTION_CHANNELS = tuple(_MENTION_BACKEND_CHANNELS)
 
 
 def _try_build_image_formatter():
@@ -797,19 +803,15 @@ def build_bot(settings: Settings) -> ZipWx:
 
     # Alert channels
     bot.register_alert_channel(FileWatcherAlertChannel(settings))
-    # FirehoseAlertChannel and JetstreamAlertChannel are alternate backends
-    # for the same public-mention source. MENTION_BACKEND in .local.env
-    # selects "firehose", "jetstream", or "both" — when both are registered,
-    # the same real post reaches both channels and each builds an identical
-    # source_uri, so the requests table's UNIQUE index on source_uri makes
-    # the second INSERT a no-op (see save_request/_handle_request's db_id is
-    # None check) and only one reply ever gets sent. Running both lets you
-    # compare which one detects a given post first without risking a
-    # double-reply.
-    if settings.mention_backend in ("jetstream", "both"):
-        bot.register_alert_channel(JetstreamAlertChannel(settings))
-    if settings.mention_backend in ("firehose", "both"):
-        bot.register_alert_channel(FirehoseAlertChannel(settings))
+    # One channel per name in MENTION_BACKEND (see _MENTION_BACKEND_CHANNELS).
+    # When more than one is registered, the same real post can reach several
+    # of them, but each builds an identical source_uri for it, so the
+    # requests table's UNIQUE index on source_uri makes every INSERT after
+    # the first a no-op (see save_request/_handle_request's db_id is None
+    # check) — only one reply ever gets sent, regardless of which channel
+    # detects the post first.
+    for name in settings.mention_backends:
+        bot.register_alert_channel(_MENTION_BACKEND_CHANNELS[name](settings))
     bot.register_alert_channel(DMAlertChannel(settings, db=bot._db))
 
     # Notification channels

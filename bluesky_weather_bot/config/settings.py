@@ -46,8 +46,8 @@ class Settings:
     # Output mode
     post_mode: str   # "text" | "image"
 
-    # Public-mention alert backend
-    mention_backend: str   # "firehose" | "jetstream" | "both"
+    # Public-mention alert backend(s) — comma-delimited, e.g. "firehose,jetstream"
+    mention_backends: frozenset[str]
 
     # Server identification (shown in latency footer)
     server_type: str  # "laptop" | "Pi"
@@ -94,9 +94,9 @@ class Settings:
             skip_historical=opt_bool("SKIP_HISTORICAL", False),
             post_mode=opt("POST_MODE", "text").lower(),
             server_type=opt("SERVER_TYPE", "laptop"),
-            mention_backend=_req_choice(
+            mention_backends=_req_choice_set(
                 opt("MENTION_BACKEND", "firehose").lower(),
-                "MENTION_BACKEND", {"firehose", "jetstream", "both"},
+                "MENTION_BACKEND", {"firehose", "jetstream"},
             ),
         )
 
@@ -112,10 +112,16 @@ class Settings:
             p.mkdir(parents=True, exist_ok=True)
 
 
-def _req_choice(value: str, key: str, allowed: set[str]) -> str:
-    if value not in allowed:
-        raise ConfigError(f"{key}={value!r} is not one of {sorted(allowed)}")
-    return value
+def _req_choice_set(value: str, key: str, allowed: set[str]) -> frozenset[str]:
+    """Parses a comma-delimited value (e.g. "firehose,jetstream") into a
+    validated set. At least one entry is required."""
+    items = frozenset(v.strip() for v in value.split(",") if v.strip())
+    if not items:
+        raise ConfigError(f"{key} must specify at least one of {sorted(allowed)}")
+    invalid = items - allowed
+    if invalid:
+        raise ConfigError(f"{key} contains invalid value(s) {sorted(invalid)} — must be one of {sorted(allowed)}")
+    return items
 
 
 def _load_dotenv(env_file: str | Path) -> None:
