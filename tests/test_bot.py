@@ -77,7 +77,7 @@ class TestAppendLatencyFooter:
     def test_pi_gets_basement_description(self):
         posts = ["weather text"]
         _append_latency_footer(posts, self._received_at(), server_type="Pi")
-        assert "a Raspberry Pi running in my basement" in posts[-1]
+        assert "a Raspberry Pi running in a basement" in posts[-1]
         assert "seconds from" in posts[-1]
 
     def test_unknown_server_type_falls_back_to_generic_phrasing(self):

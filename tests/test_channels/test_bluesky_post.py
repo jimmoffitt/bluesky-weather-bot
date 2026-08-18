@@ -236,11 +236,13 @@ class TestImageMode:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests — hit real Bluesky API
+# Live tests — actually post to the real Bluesky account. Intentionally NOT
+# marked `integration` (that marker runs by default; see pytest.ini) — these
+# must be opted into explicitly with `-m live`.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.integration
-class TestBlueskyPostIntegration:
+@pytest.mark.live
+class TestBlueskyPostLive:
     def test_send_single_post(self, settings):
         ch = BlueskyPostNotifyChannel(settings.bluesky_handle, settings.bluesky_app_password)
         payload = NotificationPayload(
