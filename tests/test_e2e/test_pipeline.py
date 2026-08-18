@@ -271,8 +271,15 @@ class TestPipelineInjection:
         text = payload.post_thread[0].lower()
         assert "sorry" in text or "couldn't" in text or "not found" in text.lower()
 
-    def test_no_location_firehose_sends_help(self, bot, post_channel):
-        """#ZipWx with no location triggers a help reply."""
+    def test_no_location_firehose_stays_silent(self, bot, post_channel):
+        """
+        A plain mention with no location and no saved home is ignored, not
+        answered with a help reply — replying to every casual @mention on a
+        public network (many of which aren't weather requests at all) would
+        make the bot a nuisance. DM's no-location case does get a help
+        reply (see test_no_location_dm_sends_help) since a DM to the bot is
+        unambiguously a request.
+        """
         bot._handle_request(AlertRequest(
             source_channel="firehose",
             requester_handle="user.bsky.social",
@@ -280,10 +287,7 @@ class TestPipelineInjection:
             raw_content="#ZipWx",
             reply_to_uri="at://did:plc:abc/app.bsky.feed.post/xyz",
         ))
-        post_channel.send.assert_called_once()
-        payload: NotificationPayload = post_channel.send.call_args[0][0]
-        assert len(payload.post_thread) == 1
-        assert "zip" in payload.post_thread[0].lower() or "city" in payload.post_thread[0].lower()
+        post_channel.send.assert_not_called()
 
     def test_no_location_dm_sends_help(self, bot, dm_channel):
         """DM with no location triggers a help reply via DM."""

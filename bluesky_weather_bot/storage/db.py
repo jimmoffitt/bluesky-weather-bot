@@ -373,8 +373,18 @@ class Database:
             -- NULLs propagate naturally: file alerts with no source_created_at
             -- will have NULL for receive_latency and end_to_end_latency.
             -- Only the root post (post_index = 0) is joined for delivery timing.
+            --
+            -- Dropped and recreated on every connect(), unlike the tables
+            -- above: "CREATE VIEW IF NOT EXISTS" previously left a stale
+            -- view in place after this definition changed (added
+            -- formatting_started_at/lookup_latency_sec/formatting_latency_sec
+            -- in place of a single processing_latency_sec column), silently
+            -- breaking get_latency_stats() with "no such column" until the
+            -- DB file was recreated from scratch. Views have no data of
+            -- their own, so recreating is free — safe to always do.
             -- --------------------------------------------------------
-            CREATE VIEW IF NOT EXISTS latency_summary AS
+            DROP VIEW IF EXISTS latency_summary;
+            CREATE VIEW latency_summary AS
             SELECT
                 r.id                    AS request_id,
                 r.source_channel,
