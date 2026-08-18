@@ -31,9 +31,14 @@ covers how it's built, how to run it, and how to deploy it.
 | Public post — mention + zip | `@zipwx.bsky.social 80501` |
 | Public post — mention + city | `@zipwx.bsky.social Denver, CO` |
 | Public post — mention + city only | `@zipwx.bsky.social Portland` *(returns results for all matches)* |
+| Public post — mention anywhere, natural phrasing | `Hey @zipwx.bsky.social, what's the forecast for Minneapolis?` |
 | Direct message — zip or city | `80501` or `Denver, CO` or `Portland` |
 | Direct message — home location | *(no text needed — uses your saved home location)* |
 | File inbox | Drop a YAML file into `inbox/` |
+
+The mention doesn't need to lead the post, and the location doesn't need to
+be the text right after it — the whole message is scanned for a zip, a
+"City, ST", or a recognized city name.
 
 The bot replies to the original post (public) or sends a DM response. Image
 mode is used for public replies; DMs always use the text thread format since
@@ -247,8 +252,10 @@ number is what `edit alarm N` / `delete alarm N` refer to.
 Alert channels (inputs)          Notify channels (outputs)
 ─────────────────────            ─────────────────────────
 FileWatcherAlertChannel    ──┐
-FirehoseAlertChannel       ──┼──▶  ZipWx (orchestrator)  ──▶  BlueskyPostNotifyChannel
-DMAlertChannel             ──┘         │                  ──▶  BlueskyDMNotifyChannel
+FirehoseAlertChannel       ──┤   (MENTION_BACKEND selects
+JetstreamAlertChannel      ──┼──▶  ZipWx (orchestrator)  ──▶  BlueskyPostNotifyChannel
+DMAlertChannel             ──┘   one/both of these two)  ──▶  BlueskyDMNotifyChannel
+                                       │
                                        ▼
                                   WeatherService  ──▶  AlarmChecker (background thread)
                                   (Open-Meteo API, free)      │
@@ -275,6 +282,57 @@ same `WeatherService` and `Database`.
 3. Register it in `bot.py`'s `build_bot()`
 4. Add routing logic in `ZipWx._route()`
 
+## Public-mention backends: Firehose vs. Jetstream
+
+Public `@mention` posts can be picked up two different ways, selected via
+`MENTION_BACKEND`:
+
+- **`firehose`** (`firehose.py`) — connects to the raw AT Protocol firehose
+  (`com.atproto.sync.subscribeRepos`) and CAR/CBOR-decodes *every* post on
+  the entire network, discarding everything that isn't a mention, to find
+  the ones that are.
+- **`jetstream`** (`jetstream.py`) — connects to Bluesky's
+  [Jetstream](https://bsky.network/docs/jetstream) service instead, which
+  re-streams the network as pre-filtered, pre-decoded JSON (server-side
+  filtered to `app.bsky.feed.post`, so no CAR/CBOR decode happens in this
+  process at all).
+
+**Why Jetstream exists:** the original motivation was a Pi 3B running two
+bots (this one plus a sibling `snowbot`), each independently firehose-
+subscribing and decoding the entire network — a real, measured contributor
+to chronic thermal throttling on the Pi (see git history around
+2026-08-10). Jetstream does the equivalent filtering upstream, on Bluesky's
+infrastructure, instead of in-process.
+
+**Measured comparison** (2026-08-17/18, same Pi 3B, same account):
+
+| | Firehose | Jetstream |
+|---|---|---|
+| Average CPU | 61.4% (7-day systemd average) | 6.31% (22.6-hour average) |
+| Detection latency (same real post, head-to-head) | — | ~35s faster |
+| Known instability | Periodic `ConsumerTooSlow` disconnects (handled by a watchdog/reconnect) | Cursor-based resume — a forced reconnect resumes from the last processed event instead of silently skipping ahead |
+
+**Running both at once is safe.** `MENTION_BACKEND=firehose,jetstream`
+registers both channels; if they both detect the same post, only one reply
+is ever sent — the `requests` table's `UNIQUE` index on `source_uri`
+(identical AT-URI format from either channel) makes the second `INSERT` a
+silent no-op. This is how the numbers above were gathered: both running
+concurrently, comparing real detections of the same live traffic rather
+than separate time windows.
+
+**Per-channel observability**, needed because both channels can share one
+process (systemd/`top` only give whole-process CPU once that happens):
+- `ThreadCPUSampler` (`base.py`) logs each channel's own thread CPU usage
+  via `time.thread_time()` every 5 minutes: `[firehose] Thread CPU: 41.8%
+  over last 300.0s (125.38s of CPU time)`.
+- Every completed request logs one latency line broken down by phase:
+  `[bot] Latency channel=jetstream receive=0.45s lookup=0.02s
+  delivery=1.81s total=2.25s`. `receive` (post creation → channel
+  detection) is the number that actually differs by channel; `lookup`/
+  `delivery` are pipeline phases and shouldn't.
+- `Database.get_latency_stats(channel="jetstream")` aggregates the same
+  data from the DB if you want it programmatically rather than grepping logs.
+
 ## Project structure
 
 ```
@@ -293,9 +351,11 @@ bluesky_weather_bot/
 │   │
 │   ├── channels/
 │   │   ├── alert/
-│   │   │   ├── base.py              # AlertChannel ABC, AlertRequest, extract_directives()
+│   │   │   ├── base.py              # AlertChannel ABC, AlertRequest, extract_directives(), ThreadCPUSampler
+│   │   │   ├── mention_parsing.py   # shared trigger/location parsing for firehose.py + jetstream.py
 │   │   │   ├── file_watcher.py      # YAML inbox watcher
-│   │   │   ├── firehose.py          # Bluesky public post stream
+│   │   │   ├── firehose.py          # Bluesky public post stream (raw AT Protocol firehose)
+│   │   │   ├── jetstream.py         # Bluesky public post stream (Jetstream — filtered JSON, lighter)
 │   │   │   └── dm_poller.py         # Bluesky Direct Messages
 │   │   └── notify/
 │   │       ├── base.py              # NotificationChannel ABC + payload/result
@@ -366,7 +426,8 @@ All settings are loaded from `.local.env` (gitignored). Copy
 | `BSKY_HANDLE` | *(required)* | Your bot's Bluesky handle |
 | `BSKY_APP_PASSWORD` | *(required)* | App password from Bluesky settings |
 | `POST_MODE` | `text` | `text` — post thread; `image` — up to 3 PNG cards |
-| `SERVER_TYPE` | `laptop` | Shown in latency footer. `Pi` gets a specific "Raspberry Pi running in my basement" phrasing; any other value is shown verbatim as "a {value}." |
+| `MENTION_BACKEND` | `firehose` | Comma-delimited list selecting which public-@mention channel(s) run: `firehose`, `jetstream`, or `firehose,jetstream` to run both at once. See [Public-mention backends](#public-mention-backends-firehose-vs-jetstream). |
+| `SERVER_TYPE` | `laptop` | Shown in latency footer. `Pi` gets a specific "Raspberry Pi running in a basement" phrasing; any other value is shown verbatim as "a {value}." |
 | `SKIP_HISTORICAL` | `false` | Skip the year-ago/10-yr-avg archive call — faster, useful during development |
 | `WEATHER_CACHE_TTL_MINUTES` | `30` | How long to cache current conditions lookups |
 | `DB_PATH` | `data/zipwx.db` | SQLite database path — point to USB drive on Pi for better I/O |
@@ -504,7 +565,19 @@ that lands mid-startup.
   actually restore traffic within one more check. This is a known rough edge
   in how the connection recovers, not something you need to intervene in —
   but if public replies stop working, a `sudo systemctl restart weather-bot`
-  is always a safe first move.
+  is always a safe first move. `JetstreamAlertChannel` has the same
+  watchdog/escalation pattern but hasn't been observed hitting it in
+  practice — see [Public-mention backends](#public-mention-backends-firehose-vs-jetstream).
+- **All `Database` access is serialized with a lock**, needed because every
+  alert channel runs on its own thread and they all share one
+  `sqlite3.Connection` — `check_same_thread=False` only disables Python's
+  own thread-affinity check, it does not make concurrent access from
+  multiple threads safe on its own. This was a real bug (not hypothetical):
+  running `firehose,jetstream` together, both channels detecting the same
+  post milliseconds apart reliably corrupted the connection's transaction
+  state and silently dropped the request. Fixed with a `threading.RLock()`
+  around every `Database` method — if you add a new method that touches
+  `self._conn`, decorate it with `@_locked` too.
 - **`.local.env` is gitignored and never committed** — confirmed clean across
   this repo's entire history. Verify on any new clone with
   `git log --all -- .local.env` (should print nothing).
