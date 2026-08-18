@@ -50,9 +50,11 @@ Postgres migration path:
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -67,11 +69,32 @@ SLOW_REQUEST_THRESHOLD_SEC = 30    # end-to-end latency above this sets is_slow 
 DEFAULT_DB_PATH            = Path("data/zipwx.db")
 
 
+def _locked(method):
+    """
+    check_same_thread=False (see connect()) only disables Python's own
+    thread-affinity check — it does NOT make sqlite3.Connection safe for
+    concurrent calls from multiple threads. Every alert channel runs on its
+    own thread and all of them call into this same connection, so without
+    this, two channels racing to persist the same event (observed: firehose
+    and jetstream both detecting one post 6ms apart) corrupts the
+    connection's internal transaction state ("cannot commit - no
+    transaction is active"), silently dropping the request. RLock (not
+    Lock) because get_latency_stats() calls the also-locked
+    _compute_p95_e2e() on the same thread.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class Database:
 
     def __init__(self, path: str | Path = DEFAULT_DB_PATH) -> None:
         self.path = Path(path)
         self._conn: Optional[sqlite3.Connection] = None
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # Connection management
@@ -450,6 +473,7 @@ class Database:
     # requests — core CRUD
     # ------------------------------------------------------------------
 
+    @_locked
     def save_request(
         self,
         source_channel: str,
@@ -498,6 +522,7 @@ class Database:
             return None
         return cur.lastrowid
 
+    @_locked
     def update_request_resolved(
         self,
         request_id: int,
@@ -514,6 +539,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def update_request_status(
         self,
         request_id: int,
@@ -532,6 +558,7 @@ class Database:
     # Called by bot.py at each pipeline stage
     # ------------------------------------------------------------------
 
+    @_locked
     def update_request_processing_start(self, request_id: int) -> None:
         """Call immediately before WeatherService.lookup()."""
         assert self._conn
@@ -541,6 +568,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def update_request_formatting_start(self, request_id: int) -> None:
         """Call immediately after WeatherService.lookup() returns, before formatting."""
         assert self._conn
@@ -550,6 +578,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def update_request_processing_finish(self, request_id: int) -> None:
         """Call immediately after format_thread() returns."""
         assert self._conn
@@ -559,6 +588,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def update_request_mark_slow(
         self,
         request_id: int,
@@ -598,6 +628,7 @@ class Database:
     # requests — queries
     # ------------------------------------------------------------------
 
+    @_locked
     def get_request(self, request_id: int) -> Optional[dict]:
         assert self._conn
         row = self._conn.execute(
@@ -605,6 +636,7 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
+    @_locked
     def get_pending_requests(self) -> list[dict]:
         assert self._conn
         rows = self._conn.execute(
@@ -612,6 +644,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_locked
     def get_recent_requests(self, limit: int = 50) -> list[dict]:
         assert self._conn
         rows = self._conn.execute(
@@ -619,6 +652,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_locked
     def get_slow_requests(self, limit: int = 50) -> list[dict]:
         """Returns requests flagged as slow, most recent first."""
         assert self._conn
@@ -632,6 +666,7 @@ class Database:
     # responses
     # ------------------------------------------------------------------
 
+    @_locked
     def save_response(
         self,
         request_id: int,
@@ -667,6 +702,7 @@ class Database:
         self._conn.commit()
         return cur.lastrowid
 
+    @_locked
     def get_responses_for_request(self, request_id: int) -> list[dict]:
         assert self._conn
         rows = self._conn.execute(
@@ -679,6 +715,7 @@ class Database:
     # weather_cache
     # ------------------------------------------------------------------
 
+    @_locked
     def get_cached_report(self, lat: float, lon: float) -> Optional[dict]:
         key = _cache_key(lat, lon)
         assert self._conn
@@ -688,6 +725,7 @@ class Database:
         ).fetchone()
         return json.loads(row["report_json"]) if row else None
 
+    @_locked
     def save_cached_report(
         self, lat: float, lon: float, display_name: str, report_json: dict
     ) -> None:
@@ -711,6 +749,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def purge_expired_cache(self) -> int:
         assert self._conn
         cur = self._conn.execute(
@@ -723,6 +762,7 @@ class Database:
     # this_day_history_cache
     # ------------------------------------------------------------------
 
+    @_locked
     def get_this_day_history(self, lat: float, lon: float, month: int, day: int) -> Optional[list]:
         assert self._conn
         key = f"{lat:.2f}:{lon:.2f}:{month:02d}-{day:02d}"
@@ -732,6 +772,7 @@ class Database:
         ).fetchone()
         return json.loads(row[0]) if row else None
 
+    @_locked
     def save_this_day_history(
         self, lat: float, lon: float, month: int, day: int, records: list
     ) -> None:
@@ -757,12 +798,14 @@ class Database:
     # seen_dm_ids
     # ------------------------------------------------------------------
 
+    @_locked
     def is_dm_seen(self, message_id: str) -> bool:
         assert self._conn
         return self._conn.execute(
             "SELECT 1 FROM seen_dm_ids WHERE message_id = ?", (message_id,)
         ).fetchone() is not None
 
+    @_locked
     def mark_dm_seen(self, message_id: str, convo_id: str) -> None:
         assert self._conn
         self._conn.execute(
@@ -771,6 +814,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def count_seen_dms(self) -> int:
         assert self._conn
         return self._conn.execute("SELECT COUNT(*) FROM seen_dm_ids").fetchone()[0]
@@ -779,6 +823,7 @@ class Database:
     # user_prefs
     # ------------------------------------------------------------------
 
+    @_locked
     def get_user_prefs(self, did: str) -> Optional[dict]:
         """Return the prefs row for did, or None if not yet saved."""
         assert self._conn
@@ -787,6 +832,7 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
+    @_locked
     def set_user_prefs(
         self,
         did: str,
@@ -830,6 +876,7 @@ class Database:
             )
         self._conn.commit()
 
+    @_locked
     def clear_home(self, did: str) -> None:
         """Remove saved home location; leave other prefs intact."""
         assert self._conn
@@ -842,6 +889,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def reset_prefs(self, did: str) -> None:
         """Delete the entire prefs row, reverting to all defaults."""
         assert self._conn
@@ -854,6 +902,7 @@ class Database:
     # alarm_rules
     # ------------------------------------------------------------------
 
+    @_locked
     def add_alarm_rule(self, rule: AlarmRule) -> int:
         """Insert a new alarm rule and return its id."""
         assert self._conn
@@ -879,6 +928,7 @@ class Database:
         self._conn.commit()
         return cur.lastrowid
 
+    @_locked
     def get_alarm_rules_for_user(self, did: str) -> list[AlarmRule]:
         """Return all active alarm rules for a user, ordered by creation time."""
         assert self._conn
@@ -888,6 +938,7 @@ class Database:
         ).fetchall()
         return [_row_to_alarm_rule(dict(r)) for r in rows]
 
+    @_locked
     def get_active_alarm_rules(self) -> list[AlarmRule]:
         """Return all active rules across all users."""
         assert self._conn
@@ -896,6 +947,7 @@ class Database:
         ).fetchall()
         return [_row_to_alarm_rule(dict(r)) for r in rows]
 
+    @_locked
     def deactivate_alarm_rule(self, rule_id: int) -> bool:
         """Mark a rule inactive (soft delete). Returns True if a row was updated."""
         assert self._conn
@@ -905,6 +957,7 @@ class Database:
         self._conn.commit()
         return cur.rowcount > 0
 
+    @_locked
     def clear_alarm_rules_for_user(self, did: str) -> int:
         """Deactivate all rules for a user. Returns count removed."""
         assert self._conn
@@ -915,6 +968,7 @@ class Database:
         self._conn.commit()
         return cur.rowcount
 
+    @_locked
     def update_alarm_rule(
         self,
         rule_id: int,
@@ -945,6 +999,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def update_alarm_location(
         self, rule_id: int, lat: float, lon: float, display: str
     ) -> None:
@@ -958,6 +1013,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def update_alarm_checked(self, rule_id: int) -> None:
         assert self._conn
         self._conn.execute(
@@ -966,6 +1022,7 @@ class Database:
         )
         self._conn.commit()
 
+    @_locked
     def update_alarm_fired(self, rule_id: int) -> None:
         assert self._conn
         self._conn.execute(
@@ -980,6 +1037,7 @@ class Database:
     # file_inbox_log
     # ------------------------------------------------------------------
 
+    @_locked
     def log_inbox_file(
         self,
         filename: str,
@@ -998,6 +1056,7 @@ class Database:
         self._conn.commit()
         return cur.lastrowid
 
+    @_locked
     def get_inbox_log(self, limit: int = 100) -> list[dict]:
         assert self._conn
         rows = self._conn.execute(
@@ -1009,6 +1068,7 @@ class Database:
     # Latency queries
     # ------------------------------------------------------------------
 
+    @_locked
     def get_latency_stats(self, channel: Optional[str] = None) -> dict:
         """
         Returns average latency statistics across completed requests,
@@ -1071,6 +1131,7 @@ class Database:
             "slow_request_pct":             _r(slow_count / n * 100) if n else 0.0,
         }
 
+    @_locked
     def get_latency_stats_by_channel(self) -> list[dict]:
         """Returns get_latency_stats() broken down per source channel."""
         assert self._conn
@@ -1081,6 +1142,7 @@ class Database:
         ]
         return [self.get_latency_stats(ch) for ch in channels]
 
+    @_locked
     def _compute_p95_e2e(self, where: str, params: list) -> Optional[float]:
         """Pulls all end-to-end values and returns the 95th percentile."""
         rows = self._conn.execute(
@@ -1103,6 +1165,7 @@ class Database:
     # Maintenance
     # ------------------------------------------------------------------
 
+    @_locked
     def prune_old_records(self, retention_days: int = RETENTION_DAYS) -> dict[str, int]:
         """
         Deletes records older than retention_days.
@@ -1141,6 +1204,7 @@ class Database:
     # Diagnostics
     # ------------------------------------------------------------------
 
+    @_locked
     def get_stats(self) -> dict:
         """Row counts + slow-request flag. Useful for health checks."""
         assert self._conn
