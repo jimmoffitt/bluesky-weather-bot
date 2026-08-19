@@ -643,6 +643,9 @@ class ZipWx:
             logger.warning("[bot] Unknown DM command: %r", cmd)
 
     def _send_dm_reply(self, request: AlertRequest, message: str) -> None:
+        """Sends a plain-text DM reply — used for command confirmations
+        and prompts, not weather reports (those go through the main
+        format-and-deliver path in _handle_request)."""
         payload = NotificationPayload(
             request_db_id=request.db_id,
             post_thread=[message],
@@ -653,6 +656,10 @@ class ZipWx:
         self._deliver(payload)
 
     def _send_help_reply(self, request: AlertRequest) -> None:
+        """Sends the usage-help card/text — for channels where a
+        no-location request should get guidance rather than silence (file
+        broadcasts and unrecognized channels; DM has its own inline help
+        text, and mention channels stay silent — see _handle_request)."""
         help_text = (
             "Mention me with a zip code or city to get weather.\n"
             "Examples:\n"
@@ -697,6 +704,8 @@ class ZipWx:
         self._deliver(payload)
 
     def _send_error_reply(self, request: AlertRequest, message: str) -> None:
+        """Sends a plain-text error reply (location-not-found, lookup
+        failure) back on whichever channel the request came from."""
         payload = NotificationPayload(
             request_db_id=request.db_id,
             post_thread=[message],
@@ -723,6 +732,9 @@ class ZipWx:
         return "bluesky_post"
 
     def _deliver(self, payload: NotificationPayload) -> "NotificationResult":
+        """Routes a payload to its target_channel's NotificationChannel,
+        falling back to whichever channel is registered if the requested
+        one isn't (defensive — _route() should always name a real one)."""
         channel = self._notify_channels.get(payload.target_channel)
         if channel is None:
             # Fallback to any available notify channel
@@ -738,9 +750,14 @@ class ZipWx:
     # ------------------------------------------------------------------
 
     def _block_until_signal(self) -> None:
+        """Blocks the calling thread until SIGINT/SIGTERM, then calls
+        stop(). This is what makes start(block=True) an actual foreground
+        process rather than returning immediately."""
         stop_event = threading.Event()
 
         def _handler(sig, frame):
+            """Signal handler — just flags the wait below to unblock; the
+            actual shutdown work happens after, on the main thread."""
             logger.info("Signal %s received — stopping.", sig)
             stop_event.set()
 
@@ -756,6 +773,8 @@ class ZipWx:
 # ---------------------------------------------------------------------------
 
 def _now() -> str:
+    """Current UTC time as an ISO8601 string — the format every
+    timestamp passed to Database is expected to be in."""
     return datetime.utcnow().isoformat()
 
 

@@ -35,6 +35,8 @@ from bot import build_bot
 
 
 def setup_logging(settings: Settings) -> None:
+    """Configures root logging to write to both stdout (for `journalctl
+    -f`/foreground runs) and settings.log_path, at settings.log_level."""
     log_path = settings.log_path
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -50,6 +52,8 @@ def setup_logging(settings: Settings) -> None:
 
 
 def main() -> None:
+    """Process entry point: loads config, sets up logging, builds the bot
+    via build_bot(), and blocks running it until Ctrl+C/SIGTERM."""
     try:
         settings = Settings.load(".local.env")
     except ConfigError as exc:

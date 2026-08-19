@@ -202,6 +202,9 @@ def backfill_yesterday(cdb: ClimateDatabase, client: ArchiveClient, dry_run: boo
 
 
 def main() -> None:
+    """CLI entry point: parses args, resolves the requested zips/cities,
+    fetches and inserts their historical daily records, computes
+    climatological stats, and prints a summary."""
     parser = argparse.ArgumentParser(
         description="Backfill historical weather data into climate.db"
     )
@@ -261,6 +264,7 @@ def main() -> None:
 
 
 def print_stats(cdb: ClimateDatabase) -> None:
+    """Prints climate.db's row/location/zip counts — the script's closing summary."""
     stats = cdb.get_stats()
     print(f"\nclimate.db stats:")
     print(f"  weather_daily rows:    {stats['weather_daily_rows']:>8,}")

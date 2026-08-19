@@ -65,6 +65,8 @@ def _load_env_credentials() -> tuple[str, str]:
 
 
 def _login(handle: str, password: str):
+    """Authenticates and returns an atproto Client. Exits the process on
+    missing dependency (atproto not installed)."""
     try:
         from atproto import Client
     except ImportError:
@@ -113,15 +115,18 @@ def _fetch_author_feed(client, actor: str, limit: int, include_replies: bool) ->
 
 
 def _post_text(post_view) -> str:
+    """Extracts a post's text, defaulting to "" for anything malformed."""
     record = getattr(post_view, "record", None)
     return getattr(record, "text", "") or ""
 
 
 def _post_uri(post_view) -> str:
+    """Extracts a post's AT-URI, defaulting to "" for anything malformed."""
     return getattr(post_view, "uri", "") or ""
 
 
 def _post_created_at(post_view) -> str:
+    """Extracts a post's createdAt timestamp, defaulting to "" for anything malformed."""
     record = getattr(post_view, "record", None)
     return getattr(record, "created_at", "") or ""
 
@@ -140,6 +145,9 @@ def _delete_post(client, uri: str) -> bool:
 
 
 def main() -> None:
+    """CLI entry point: parses args, fetches the account's posts, filters
+    by --match, previews them, and deletes (only if --delete is passed,
+    with a confirmation prompt unless --yes is also passed)."""
     parser = argparse.ArgumentParser(
         description="Delete Bluesky posts matching a text filter.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
