@@ -1,3 +1,12 @@
+"""
+Alarm domain model: the metrics/operators an alarm condition can use, and
+the AlarmRule dataclass that represents one user-registered alarm.
+
+Pure data + small pure helpers only — parsing plain-English alarm text
+into an AlarmRule lives in parser.py, and evaluating a rule against a
+WeatherReport lives in checker.py.
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
@@ -74,6 +83,8 @@ class AlarmRule:
     # ------------------------------------------------------------------
 
     def unit_label(self) -> str:
+        """The display unit for this rule's metric, respecting self.units
+        (e.g. "°F" or "°C" for a temperature metric)."""
         imp_u, met_u = METRIC_UNITS.get(self.metric, ("", ""))
         return met_u if self.units == "metric" else imp_u
 

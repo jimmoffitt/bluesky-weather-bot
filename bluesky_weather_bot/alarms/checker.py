@@ -68,6 +68,7 @@ class AlarmChecker:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
+        """Spawns the checker thread and returns immediately (non-blocking)."""
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._check_loop,
@@ -78,6 +79,7 @@ class AlarmChecker:
         logger.info("[alarm] Checker started — interval %.0fs", self._check_interval)
 
     def stop(self) -> None:
+        """Signals the checker thread to exit and waits for the current cycle to finish."""
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=self._check_interval + 5)
@@ -97,6 +99,8 @@ class AlarmChecker:
             self._stop_event.wait(timeout=self._check_interval)
 
     def _run_checks(self) -> None:
+        """One full check cycle — see module docstring for the 5-step
+        sequence (load, group by location, resolve, evaluate, fire)."""
         rules = self._db.get_active_alarm_rules()
         if not rules:
             return
@@ -154,6 +158,12 @@ class AlarmChecker:
     def _evaluate_and_maybe_fire(
         self, rule: AlarmRule, report: WeatherReport
     ) -> None:
+        """
+        Checks one rule's cooldown, then its condition, and fires (DM or
+        public post, per rule.is_public) if both pass. Always marks the
+        rule as checked first, regardless of outcome, so
+        last_checked_at reflects every evaluation attempt.
+        """
         self._db.update_alarm_checked(rule.id)
 
         # Respect cooldown
@@ -183,6 +193,7 @@ class AlarmChecker:
             self._fire_dm(rule, actual_value, location)
 
     def _fire_dm(self, rule: AlarmRule, actual_value: float, location: str) -> None:
+        """Sends a private-alarm notification as a DM and records the fire on success."""
         message = _format_alarm_message(rule, actual_value, location)
         payload = NotificationPayload(
             request_db_id=None,
@@ -197,6 +208,9 @@ class AlarmChecker:
             logger.error("[alarm] DM failed for rule %d: %s", rule.id, result.error)
 
     def _fire_public(self, rule: AlarmRule, actual_value: float, location: str) -> None:
+        """Sends a public-alarm notification as a mentioning post and
+        records the fire on success. If no post channel was configured,
+        logs and skips — the rule will simply be retried next cycle."""
         if self._post is None:
             logger.error(
                 "[alarm] Rule %d is public but no post channel is configured — "
@@ -278,6 +292,7 @@ def _evaluate_condition(rule: AlarmRule, report: WeatherReport) -> tuple[bool, f
 
 
 def _format_alarm_message(rule: AlarmRule, actual_value: float, location: str) -> str:
+    """Builds the DM text for a private alarm fire."""
     unit = rule.unit_label()
     metric_label = METRIC_LABELS.get(rule.metric, rule.metric).capitalize()
     op_sym = OPERATOR_SYMBOLS.get(rule.operator, rule.operator)

@@ -172,6 +172,8 @@ def parse_alarm_text(
 # ---------------------------------------------------------------------------
 
 def _detect_metric(text: str) -> Optional[str]:
+    """Matches alarm text against _METRIC_PATTERNS in order, returning the
+    first metric that matches, or None if the text names no known metric."""
     for pattern, metric in _METRIC_PATTERNS:
         if pattern.search(text):
             return metric
@@ -179,6 +181,9 @@ def _detect_metric(text: str) -> Optional[str]:
 
 
 def _detect_operator(text: str) -> str:
+    """Detects the comparison direction from alarm text. Defaults to "gte"
+    since that covers the most common phrasings ("hits", "above", "over",
+    "exceeds", "or higher") without needing an explicit pattern list for each."""
     if _LT_PAT.search(text):
         return "lt"
     if _LTE_PAT.search(text):
@@ -237,6 +242,10 @@ def _find_location(text: str) -> Tuple[Optional[str], Optional[re.Match]]:
 
 
 def _location_from_match(m: Optional[re.Match]) -> Optional[str]:
+    """Cleans up a location regex match: strips trailing punctuation,
+    rejects it if the first word looks like a false-positive trigger word
+    (see _LOCATION_SKIP_FIRST_WORDS) or the result is too short to be a
+    real place name."""
     if not m:
         return None
     candidate = m.group(1).strip().rstrip(",").strip()
