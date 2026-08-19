@@ -43,6 +43,9 @@ class ClimateDatabase:
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
+        """Opens the connection (WAL mode, larger page cache than the
+        operational DB since backfill runs do bulk inserts) and ensures the
+        schema exists."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -54,6 +57,7 @@ class ClimateDatabase:
         logger.info("ClimateDatabase connected: %s", self.path)
 
     def close(self) -> None:
+        """Closes the connection. Safe to call even if never connected."""
         if self._conn:
             self._conn.close()
             self._conn = None
@@ -71,6 +75,7 @@ class ClimateDatabase:
     # ------------------------------------------------------------------
 
     def _create_schema(self) -> None:
+        """Creates weather_daily and location_climate if missing — idempotent, safe on every connect()."""
         assert self._conn
         self._conn.executescript("""
             -- --------------------------------------------------------
@@ -286,6 +291,8 @@ class ClimateDatabase:
     # ------------------------------------------------------------------
 
     def has_data_for_location(self, location_key: str) -> bool:
+        """Checks whether any daily record exists for this location —
+        lets the backfill script skip locations it's already populated."""
         assert self._conn
         row = self._conn.execute(
             "SELECT 1 FROM weather_daily WHERE location_key = ? LIMIT 1",
@@ -531,9 +538,12 @@ class ClimateDatabase:
     # ------------------------------------------------------------------
 
     def get_stats(self) -> dict:
+        """Summary counts (rows, distinct locations/zips) for the backfill
+        script's progress reporting."""
         assert self._conn
 
         def count(table: str) -> int:
+            """Row count for a whole table."""
             return self._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
         locations = self._conn.execute(
@@ -577,4 +587,5 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def _now() -> str:
+    """Current UTC time as an ISO8601 string."""
     return datetime.utcnow().isoformat()

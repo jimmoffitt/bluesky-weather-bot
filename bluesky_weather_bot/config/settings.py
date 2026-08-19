@@ -54,27 +54,38 @@ class Settings:
 
     @classmethod
     def load(cls, env_file: str | Path = ".local.env") -> "Settings":
+        """
+        Main entry point: loads env_file into os.environ (if present) and
+        builds a fully-populated Settings. Raises ConfigError if a required
+        key (BSKY_HANDLE, BSKY_APP_PASSWORD) is missing — everything else
+        has a default via the opt_* helpers below.
+        """
         _load_dotenv(env_file)
 
         def req(key: str) -> str:
+            """Reads a required env var; raises ConfigError if unset/blank."""
             val = os.getenv(key, "").strip()
             if not val:
                 raise ConfigError(f"Required config key {key!r} missing from {env_file}")
             return val
 
         def opt(key: str, default: str = "") -> str:
+            """Reads an optional string env var, falling back to default."""
             return os.getenv(key, default).strip()
 
         def opt_bool(key: str, default: bool = False) -> bool:
+            """Reads an optional boolean env var ("1"/"true"/"yes" → True, case-insensitive)."""
             return os.getenv(key, str(default)).strip().lower() in ("1", "true", "yes")
 
         def opt_float(key: str, default: float) -> float:
+            """Reads an optional float env var, falling back to default on unset or unparseable."""
             try:
                 return float(os.getenv(key, str(default)))
             except ValueError:
                 return default
 
         def opt_int(key: str, default: int) -> int:
+            """Reads an optional int env var, falling back to default on unset or unparseable."""
             try:
                 return int(os.getenv(key, str(default)))
             except ValueError:

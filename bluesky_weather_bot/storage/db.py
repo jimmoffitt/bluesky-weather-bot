@@ -101,6 +101,9 @@ class Database:
     # ------------------------------------------------------------------
 
     def connect(self) -> None:
+        """Opens the connection (WAL mode, foreign keys on) and ensures the
+        schema exists. Call once before any other method; not itself
+        @_locked since no other thread can be using this Database yet."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -111,6 +114,7 @@ class Database:
         logger.info("Database connected: %s", self.path)
 
     def close(self) -> None:
+        """Closes the connection. Safe to call even if never connected."""
         if self._conn:
             self._conn.close()
             self._conn = None
@@ -128,6 +132,9 @@ class Database:
     # ------------------------------------------------------------------
 
     def _create_schema(self) -> None:
+        """Creates every table/index if missing and applies any pending
+        column migrations (see the ALTER TABLE calls below) — safe to run
+        on every connect(), including against an existing populated DB."""
         assert self._conn
         self._conn.executescript("""
             -- --------------------------------------------------------
@@ -540,6 +547,8 @@ class Database:
         resolved_lat: float,
         resolved_lon: float,
     ) -> None:
+        """Caches the resolved location on a request row so a repeat
+        request for the same raw_location can skip re-geocoding."""
         assert self._conn
         self._conn.execute(
             """UPDATE requests
@@ -556,6 +565,8 @@ class Database:
         status: str,
         error_message: Optional[str] = None,
     ) -> None:
+        """Sets a request's terminal or transitional status ('pending' |
+        'complete' | 'error'), optionally recording why on error."""
         assert self._conn
         self._conn.execute(
             "UPDATE requests SET status = ?, error_message = ? WHERE id = ?",
@@ -640,6 +651,7 @@ class Database:
 
     @_locked
     def get_request(self, request_id: int) -> Optional[dict]:
+        """Fetches one request row by id, or None if it doesn't exist."""
         assert self._conn
         row = self._conn.execute(
             "SELECT * FROM requests WHERE id = ?", (request_id,)
@@ -648,6 +660,8 @@ class Database:
 
     @_locked
     def get_pending_requests(self) -> list[dict]:
+        """Fetches all requests still in status='pending', oldest first —
+        useful for finding stuck/orphaned requests (e.g. after a crash)."""
         assert self._conn
         rows = self._conn.execute(
             "SELECT * FROM requests WHERE status = 'pending' ORDER BY ingested_at"
@@ -656,6 +670,7 @@ class Database:
 
     @_locked
     def get_recent_requests(self, limit: int = 50) -> list[dict]:
+        """Fetches the most recent requests, newest first."""
         assert self._conn
         rows = self._conn.execute(
             "SELECT * FROM requests ORDER BY ingested_at DESC LIMIT ?", (limit,)
@@ -714,6 +729,7 @@ class Database:
 
     @_locked
     def get_responses_for_request(self, request_id: int) -> list[dict]:
+        """Fetches all sent responses (thread posts) for one request, in post order."""
         assert self._conn
         rows = self._conn.execute(
             "SELECT * FROM responses WHERE request_id = ? ORDER BY post_index",
@@ -727,6 +743,8 @@ class Database:
 
     @_locked
     def get_cached_report(self, lat: float, lon: float) -> Optional[dict]:
+        """Returns the cached WeatherReport JSON for (lat, lon) if present
+        and not yet expired (CACHE_TTL_HOURS), else None."""
         key = _cache_key(lat, lon)
         assert self._conn
         row = self._conn.execute(
@@ -739,6 +757,8 @@ class Database:
     def save_cached_report(
         self, lat: float, lon: float, display_name: str, report_json: dict
     ) -> None:
+        """Upserts a WeatherReport into the cache, keyed by rounded
+        (lat, lon), with a fresh CACHE_TTL_HOURS expiry."""
         key    = _cache_key(lat, lon)
         now_dt = datetime.utcnow()
         expires = (now_dt + timedelta(hours=CACHE_TTL_HOURS)).isoformat()
@@ -761,6 +781,7 @@ class Database:
 
     @_locked
     def purge_expired_cache(self) -> int:
+        """Deletes expired weather_cache rows; returns the count removed."""
         assert self._conn
         cur = self._conn.execute(
             "DELETE FROM weather_cache WHERE expires_at <= ?", (_now(),)
@@ -774,6 +795,9 @@ class Database:
 
     @_locked
     def get_this_day_history(self, lat: float, lon: float, month: int, day: int) -> Optional[list]:
+        """Returns the cached "on this day" ERA5 history for (lat, lon,
+        month, day) if present and not expired, else None — the /day
+        directive's cache, separate from weather_cache (see module docstring)."""
         assert self._conn
         key = f"{lat:.2f}:{lon:.2f}:{month:02d}-{day:02d}"
         row = self._conn.execute(
@@ -786,6 +810,7 @@ class Database:
     def save_this_day_history(
         self, lat: float, lon: float, month: int, day: int, records: list
     ) -> None:
+        """Upserts one "on this day" ERA5 history result into its cache."""
         assert self._conn
         key      = f"{lat:.2f}:{lon:.2f}:{month:02d}-{day:02d}"
         now_dt   = datetime.utcnow()
@@ -810,6 +835,8 @@ class Database:
 
     @_locked
     def is_dm_seen(self, message_id: str) -> bool:
+        """Persistent (across-restart) half of DMAlertChannel's two-layer
+        dedup — see that module's docstring."""
         assert self._conn
         return self._conn.execute(
             "SELECT 1 FROM seen_dm_ids WHERE message_id = ?", (message_id,)
@@ -817,6 +844,7 @@ class Database:
 
     @_locked
     def mark_dm_seen(self, message_id: str, convo_id: str) -> None:
+        """Records a DM as processed (persistent layer)."""
         assert self._conn
         self._conn.execute(
             "INSERT OR IGNORE INTO seen_dm_ids (message_id, convo_id, seen_at) VALUES (?,?,?)",
@@ -826,6 +854,7 @@ class Database:
 
     @_locked
     def count_seen_dms(self) -> int:
+        """Total count of DM message IDs ever recorded as seen."""
         assert self._conn
         return self._conn.execute("SELECT COUNT(*) FROM seen_dm_ids").fetchone()[0]
 
@@ -1025,6 +1054,8 @@ class Database:
 
     @_locked
     def update_alarm_checked(self, rule_id: int) -> None:
+        """Records that AlarmChecker just evaluated this rule (whether or
+        not the condition was met — see update_alarm_fired for that case)."""
         assert self._conn
         self._conn.execute(
             "UPDATE alarm_rules SET last_checked_at = ? WHERE id = ?",
@@ -1034,6 +1065,9 @@ class Database:
 
     @_locked
     def update_alarm_fired(self, rule_id: int) -> None:
+        """Records that this alarm's condition was just met and notified —
+        increments fire_count and stamps last_fired_at, which the cooldown
+        logic in AlarmChecker reads to avoid re-notifying too soon."""
         assert self._conn
         self._conn.execute(
             """UPDATE alarm_rules
@@ -1055,6 +1089,9 @@ class Database:
         request_id: Optional[int] = None,
         error_detail: Optional[str] = None,
     ) -> int:
+        """Records one FileWatcherAlertChannel processing attempt (audit
+        trail, separate from the requests table) — outcome is typically
+        "dispatched" or "parse_error". Returns the new log row's id."""
         assert self._conn
         now = _now()
         cur = self._conn.execute(
@@ -1068,6 +1105,7 @@ class Database:
 
     @_locked
     def get_inbox_log(self, limit: int = 100) -> list[dict]:
+        """Fetches the most recent file-inbox processing attempts, newest first."""
         assert self._conn
         rows = self._conn.execute(
             "SELECT * FROM file_inbox_log ORDER BY received_at DESC LIMIT ?", (limit,)
@@ -1220,9 +1258,11 @@ class Database:
         assert self._conn
 
         def count(table: str) -> int:
+            """Row count for a whole table."""
             return self._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
         def count_where(table: str, clause: str, *args) -> int:
+            """Row count for a table matching a WHERE clause."""
             return self._conn.execute(
                 f"SELECT COUNT(*) FROM {table} WHERE {clause}", args
             ).fetchone()[0]
@@ -1246,10 +1286,13 @@ class Database:
 # ---------------------------------------------------------------------------
 
 def _now() -> str:
+    """Current UTC time as an ISO8601 string — the format every timestamp
+    column in this module stores."""
     return datetime.utcnow().isoformat()
 
 
 def _row_to_alarm_rule(row: dict) -> AlarmRule:
+    """Deserializes one alarm_rules row into an AlarmRule dataclass."""
     return AlarmRule(
         id=row["id"],
         user_did=row["user_did"],
@@ -1273,9 +1316,13 @@ def _row_to_alarm_rule(row: dict) -> AlarmRule:
 
 
 def _cache_key(lat: float, lon: float) -> str:
+    """Builds the weather_cache key: coordinates rounded to ~1km precision
+    plus the current hour, so the cache naturally expires hourly-ish
+    without needing a separate cleanup pass to be useful."""
     hour = datetime.utcnow().strftime("%Y%m%d%H")
     return f"{round(lat, 2):.2f}:{round(lon, 2):.2f}:{hour}"
 
 
 def _r(val) -> Optional[float]:
+    """Rounds a latency value to 3 decimal places, passing through None (NULL) unchanged."""
     return round(float(val), 3) if val is not None else None
