@@ -99,6 +99,8 @@ class FileWatcherAlertChannel(AlertChannel):
     # ------------------------------------------------------------------
 
     def _poll_loop(self) -> None:
+        """Polling thread entry point: checks the inbox directory every
+        interval seconds until stop() is called."""
         while not self._stop_event.is_set():
             try:
                 self._process_inbox()
@@ -107,6 +109,8 @@ class FileWatcherAlertChannel(AlertChannel):
             self._stop_event.wait(timeout=self._interval)
 
     def _process_inbox(self) -> None:
+        """Finds all YAML files currently in the inbox and hands each to
+        _handle_file, oldest-name-first."""
         candidates = sorted(
             p for p in self._inbox.iterdir()
             if p.is_file() and p.suffix.lower() in (".yaml", ".yml")
@@ -115,6 +119,8 @@ class FileWatcherAlertChannel(AlertChannel):
             self._handle_file(path)
 
     def _handle_file(self, path: Path) -> None:
+        """Parses and dispatches one file, then moves it to archive/ on
+        success or errors/ on a parse failure — either way it leaves the inbox."""
         logger.info("[file] Processing %s", path.name)
         try:
             request = self._parse_file(path)
@@ -130,6 +136,9 @@ class FileWatcherAlertChannel(AlertChannel):
         self._move(path, self._archive)
 
     def _parse_file(self, path: Path) -> AlertRequest:
+        """Reads and validates one inbox YAML file into an AlertRequest.
+        Raises on malformed YAML/structure — the caller (_handle_file)
+        catches that and routes the file to errors/ instead of archive/."""
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 

@@ -90,6 +90,7 @@ class JetstreamAlertChannel(AlertChannel):
     # ------------------------------------------------------------------
 
     def start(self) -> None:
+        """Spawns the listener thread and returns immediately (non-blocking)."""
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run,
@@ -100,6 +101,7 @@ class JetstreamAlertChannel(AlertChannel):
         logger.info("[jetstream] Started — watching for @%s mentions", self._bot_handle)
 
     def stop(self) -> None:
+        """Signals the listener thread to exit and waits up to 5s for it to finish."""
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
@@ -110,6 +112,11 @@ class JetstreamAlertChannel(AlertChannel):
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
+        """
+        Listener thread entry point. Lazily installs `websockets` if
+        missing, then hands off to the asyncio event loop that owns the
+        connection for the rest of this thread's life.
+        """
         try:
             import websockets
         except ImportError:
@@ -127,6 +134,8 @@ class JetstreamAlertChannel(AlertChannel):
         asyncio.run(self._async_main(websockets))
 
     def _build_url(self) -> str:
+        """Builds the subscribe URL for the primary endpoint, including the
+        collection filter and, if we have one, a cursor to resume from."""
         endpoint = self._ENDPOINTS[0]
         params = [f"wantedCollections={c}" for c in self._WANTED_COLLECTIONS]
         if self._cursor is not None:
@@ -134,6 +143,12 @@ class JetstreamAlertChannel(AlertChannel):
         return f"{endpoint}?{'&'.join(params)}"
 
     async def _async_main(self, websockets) -> None:
+        """
+        Owns the connect/consume/reconnect loop for this channel's whole
+        lifetime, plus the watchdog task running alongside it. Reconnects
+        (with a 5s backoff) on any connection error or watchdog-forced
+        close; exits only when stop() has been called.
+        """
         watchdog_task = asyncio.create_task(self._watchdog(websockets))
         try:
             while not self._stop_event.is_set():
@@ -194,6 +209,14 @@ class JetstreamAlertChannel(AlertChannel):
                     pass
 
     def _handle_message(self, raw: str) -> None:
+        """
+        Per-message entry point, called synchronously for every event
+        Jetstream sends (already filtered server-side to app.bsky.feed.post
+        creates — see _WANTED_COLLECTIONS). Parses the JSON envelope,
+        updates the resume cursor, filters down to bot-mentioning posts,
+        and dispatches an AlertRequest for each new one (deduped against
+        _seen_uris so a reconnect replay can't double-process).
+        """
         self._cpu_sampler.sample("jetstream")
         try:
             evt = json.loads(raw)
@@ -239,9 +262,12 @@ class JetstreamAlertChannel(AlertChannel):
         self._dispatch(request)
 
     def _is_trigger(self, text: str) -> bool:
+        """Returns True if the post text @mentions this bot, anywhere in it."""
         return is_mention_trigger(text, self._bot_handle)
 
     def _build_request(self, text: str, did: str, commit: dict, record: dict) -> Optional[AlertRequest]:
+        """Builds the AlertRequest for a confirmed trigger post. did is the
+        author's DID (Jetstream's equivalent of the firehose's repo field)."""
         location_text, directives = extract_directives(text)
         raw_location = self._extract_location(location_text)
 

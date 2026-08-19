@@ -53,6 +53,13 @@ class BlueskyDMNotifyChannel(NotificationChannel):
     # ------------------------------------------------------------------
 
     def send(self, payload: NotificationPayload) -> NotificationResult:
+        """
+        Sends payload.post_thread as one or more sequential DMs (split by
+        _split_message if it exceeds DM_MAX_CHARS). Resolves the target
+        convo from payload.reply_to_uri, falling back to creating/finding a
+        convo with payload.recipient_handle. Never raises — failures come
+        back as NotificationResult(success=False, error=...).
+        """
         if not payload.post_thread:
             return NotificationResult(
                 success=False, channel=self.CHANNEL_NAME,
@@ -104,6 +111,8 @@ class BlueskyDMNotifyChannel(NotificationChannel):
     # ------------------------------------------------------------------
 
     def _login(self) -> bool:
+        """Authenticates and sets up the chat-proxy client. Called once from
+        __init__ and again lazily by send() if the client was never set up."""
         try:
             from atproto import Client
             self._client = Client()
@@ -133,6 +142,8 @@ class BlueskyDMNotifyChannel(NotificationChannel):
             return None
 
     def _send_message(self, convo_id: str, text: str) -> None:
+        """Sends a single message to an existing convo. Raises on failure —
+        the caller (send()) catches it and reports via NotificationResult."""
         if self._chat_client is None:
             raise RuntimeError("Not authenticated")
         from atproto import models as atproto_models

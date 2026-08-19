@@ -26,6 +26,7 @@ _CARDINAL = [
 
 
 def _deg_to_cardinal(deg: float) -> str:
+    """Converts a wind direction in degrees to a 16-point compass label (N, NNE, NE, ...)."""
     return _CARDINAL[round(deg / 22.5) % 16]
 
 
@@ -42,6 +43,9 @@ def _hour_label(dt: datetime) -> str:
 
 
 def _weather_emoji(description: str) -> str:
+    """Maps a WMO weather description string to a matching emoji, by
+    keyword substring match (not an exact/enum lookup, since descriptions
+    like "Light rain" vs "Rain" vs "Heavy rain" should share one emoji)."""
     d = description.lower()
     if "clear sky" in d:
         return "\u2600\ufe0f"   # ☀️
@@ -104,6 +108,7 @@ class WeatherFormatter:
     # ------------------------------------------------------------------
 
     def _post1_current(self, report: WeatherReport, units: str = "imperial") -> str:
+        """Builds the first (always-sent) post: current conditions."""
         c   = report.current
         loc = report.location.display_name
         if report.location.zip_code:
@@ -152,6 +157,7 @@ class WeatherFormatter:
     # ------------------------------------------------------------------
 
     def _post2_forecast(self, report: WeatherReport, units: str = "imperial") -> str:
+        """Builds the second post: next-6-hours forecast thread reply."""
         loc   = report.location.display_name
         slots = report.forecast.next_n_hours(6)
         lines = [f"⏱ Next 6 Hours — {loc}"]
@@ -180,6 +186,9 @@ class WeatherFormatter:
     # ------------------------------------------------------------------
 
     def _post3_historical(self, report: WeatherReport, units: str = "imperial") -> Optional[str]:
+        """Builds the third post: year-ago + 10-year-average comparison.
+        Returns None (post omitted) if neither value is available, e.g.
+        when SKIP_HISTORICAL is set."""
         h = report.historical
         if h.year_ago is None and h.ten_year_avg is None:
             return None
@@ -188,6 +197,7 @@ class WeatherFormatter:
         lines = [f"📅 Historical — {loc}"]
 
         def _hist_line(r: DailyHistoricalRecord) -> str:
+            """Formats one DailyHistoricalRecord as a hi/lo/precip line."""
             if units == "metric":
                 return (
                     f"  Hi {r.temp_max_c:.0f}°C ({r.temp_max_f:.0f}°F)"

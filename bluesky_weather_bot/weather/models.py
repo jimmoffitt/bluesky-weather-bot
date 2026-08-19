@@ -26,6 +26,7 @@ class ResolvedLocation:
 
 @dataclass
 class CurrentConditions:
+    """Right-now conditions for one location, dual-unit throughout (°F/°C, mph/kph, in/mm)."""
     timestamp: datetime
     temperature_f: float
     temperature_c: float
@@ -48,6 +49,7 @@ class CurrentConditions:
 
 @dataclass
 class HourlyForecastSlot:
+    """One hour of forecast data — see Forecast.next_n_hours() for the usual entry point."""
     hour: datetime
     temperature_f: float
     temperature_c: float
@@ -63,9 +65,12 @@ class HourlyForecastSlot:
 
 @dataclass
 class Forecast:
+    """Full hourly forecast (as many slots as the API returned)."""
     slots: list[HourlyForecastSlot] = field(default_factory=list)
 
     def next_n_hours(self, n: int = 6) -> list[HourlyForecastSlot]:
+        """Truncates to the first n slots — the formatter's default view
+        shows only the next few hours, not the whole forecast."""
         return self.slots[:n]
 
 
@@ -95,6 +100,8 @@ class DailyForecast:
 
 @dataclass
 class DailyHistoricalRecord:
+    """One day's actuals from the ERA5 archive — used for both the
+    year-ago comparison and the 10-year average (see HistoricalComparison)."""
     date: datetime
     temp_max_f: float
     temp_max_c: float
@@ -163,4 +170,6 @@ WMO_DESCRIPTIONS: dict[int, str] = {
 
 
 def wmo_description(code: int) -> str:
+    """Maps an Open-Meteo WMO weather code to a human-readable string,
+    falling back to a labeled placeholder for any code not in the table."""
     return WMO_DESCRIPTIONS.get(code, f"Unknown ({code})")

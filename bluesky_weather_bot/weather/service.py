@@ -312,6 +312,8 @@ def _dict_to_report(d: dict) -> WeatherReport:
 
 
 def _parse_daily_record(r: Optional[dict]) -> Optional[DailyHistoricalRecord]:
+    """Inverse of _history_record_to_dict — deserializes one cached
+    "this day" history record read back from the DB."""
     if r is None:
         return None
     return DailyHistoricalRecord(
@@ -330,6 +332,8 @@ def _parse_daily_record(r: Optional[dict]) -> Optional[DailyHistoricalRecord]:
 
 
 def _history_record_to_dict(r: DailyHistoricalRecord) -> dict:
+    """Serializes one DailyHistoricalRecord for the this_day_history_cache
+    table's JSON blob column."""
     return {
         "date":               r.date.isoformat(),
         "temp_max_f":         r.temp_max_f,
@@ -346,4 +350,5 @@ def _history_record_to_dict(r: DailyHistoricalRecord) -> dict:
 
 
 def _dicts_to_history(records: list[dict]) -> list[DailyHistoricalRecord]:
+    """Batch form of _parse_daily_record, for a full cached "this day" history list."""
     return [_parse_daily_record(r) for r in records if r is not None]  # type: ignore[misc]

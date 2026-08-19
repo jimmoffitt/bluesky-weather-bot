@@ -150,6 +150,8 @@ class ArchiveClient:
     # ------------------------------------------------------------------
 
     def _get(self, params: dict, attempt: int = 0) -> dict:
+        """GET with exponential-backoff retry on rate limiting (HTTP 429)
+        and transient network errors, up to MAX_RETRIES attempts."""
         url = ARCHIVE_URL + "?" + urllib.parse.urlencode(params)
         logger.debug("Archive API: %s", url)
         try:
@@ -177,6 +179,8 @@ class ArchiveClient:
         display_name: Optional[str],
         zip_code: Optional[str],
     ) -> list[dict]:
+        """Flattens one archive API response into a list of per-day record
+        dicts, ready for bulk insert into the climate DB."""
         daily    = data.get("daily", {})
         times    = daily.get("time", [])
         max_t    = daily.get("temperature_2m_max", [])
@@ -220,4 +224,6 @@ def _f(v) -> Optional[float]:
 
 
 def _at(lst: list, i: int):
+    """Safe indexed access — returns None instead of raising past the end
+    of a shorter-than-expected API response array."""
     return lst[i] if i < len(lst) else None

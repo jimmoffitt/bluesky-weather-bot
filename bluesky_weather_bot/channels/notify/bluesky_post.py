@@ -50,6 +50,13 @@ class BlueskyPostNotifyChannel(NotificationChannel):
     # ------------------------------------------------------------------
 
     def send(self, payload: NotificationPayload) -> NotificationResult:
+        """
+        Sends payload.post_thread as a chain of posts (see class docstring
+        for the threading rule), or delegates to _send_image_post if
+        payload.post_images is set (image mode is always a single post, not
+        a thread). Never raises — failures come back as
+        NotificationResult(success=False, error=...).
+        """
         if not payload.post_thread:
             return NotificationResult(
                 success=False, channel=self.CHANNEL_NAME,
@@ -139,6 +146,8 @@ class BlueskyPostNotifyChannel(NotificationChannel):
     # ------------------------------------------------------------------
 
     def _login(self) -> bool:
+        """Authenticates and sets up the client. Called once from __init__
+        and again lazily by send() if the client was never set up."""
         try:
             from atproto import Client
             self._client = Client()

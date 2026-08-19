@@ -103,6 +103,8 @@ class WeatherClient:
     # ------------------------------------------------------------------
 
     def _fetch_current_and_hourly(self, lat: float, lon: float, timezone: str) -> dict:
+        """One API call covers current conditions + the 12-hour and 7-day
+        forecasts — Open-Meteo returns all three from the same endpoint."""
         params = {
             "latitude": lat,
             "longitude": lon,
@@ -119,6 +121,8 @@ class WeatherClient:
         return self._get(params)
 
     def _fetch_daily(self, lat: float, lon: float, timezone: str) -> dict:
+        """Fetches the year-ago-to-now daily archive, used to build the
+        year-ago and 10-year-average historical comparison."""
         from datetime import date, timedelta
         end_date   = (date.today() - timedelta(days=1)).isoformat()
         start_date = (date.today() - timedelta(days=380)).isoformat()
@@ -136,12 +140,14 @@ class WeatherClient:
         return self._get_archive(params)
 
     def _get(self, params: dict) -> dict:
+        """GET against the current-conditions/forecast endpoint."""
         url = BASE_URL + "?" + urllib.parse.urlencode(params)
         logger.debug("Open-Meteo: %s", url)
         with urllib.request.urlopen(url, timeout=15) as resp:
             return json.loads(resp.read())
 
     def _get_archive(self, params: dict) -> dict:
+        """GET against the historical-archive endpoint (separate API from current/forecast)."""
         url = ARCHIVE_URL + "?" + urllib.parse.urlencode(params)
         logger.debug("Open-Meteo archive: %s", url)
         with urllib.request.urlopen(url, timeout=15) as resp:
@@ -152,6 +158,7 @@ class WeatherClient:
     # ------------------------------------------------------------------
 
     def _parse_current(self, data: dict) -> CurrentConditions:
+        """Parses the "current" block of the API response into CurrentConditions."""
         c = data["current"]
         temp_f   = _f(c.get("temperature_2m"))
         feels_f  = _f(c.get("apparent_temperature"))
@@ -182,6 +189,8 @@ class WeatherClient:
         )
 
     def _parse_forecast(self, data: dict) -> Forecast:
+        """Parses the "hourly" block into a full Forecast (all returned
+        slots — truncation to "next N hours" happens at render time)."""
         h = data.get("hourly", {})
         times        = h.get("time", [])
         temps        = h.get("temperature_2m", [])
@@ -213,6 +222,12 @@ class WeatherClient:
         return Forecast(slots=slots)
 
     def _parse_historical(self, data: dict, skip_historical: bool) -> HistoricalComparison:
+        """
+        Builds the year-ago-exact-date record and the ±7-day 10-year
+        average from the daily archive block. Returns an empty
+        HistoricalComparison if skip_historical is set (SKIP_HISTORICAL env
+        var, for faster local development) or the archive call was skipped.
+        """
         if skip_historical or "daily" not in data:
             return HistoricalComparison()
 
@@ -292,6 +307,8 @@ class WeatherClient:
         return HistoricalComparison(year_ago=year_ago_record, ten_year_avg=ten_year_avg)
 
     def _parse_daily_forecast(self, data: dict) -> DailyForecast:
+        """Parses the 7-day daily forecast block (distinct from
+        _parse_historical, which covers the past, not the future)."""
         df = data.get("daily_forecast", {})
         times    = df.get("time", [])
         codes    = df.get("weather_code", [])

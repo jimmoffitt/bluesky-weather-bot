@@ -265,6 +265,12 @@ class LocationResolver:
     """
 
     def resolve(self, raw: str) -> list[ResolvedLocation]:
+        """
+        Main entry point: routes to zip or city resolution based on the
+        input's shape. Returns a list because an ambiguous bare city name
+        (e.g. "Portland") resolves to multiple candidates — every other
+        path returns a single-element list.
+        """
         raw = raw.strip()
         if ZIP_RE.match(raw):
             return [self._resolve_zip(raw)]
@@ -321,6 +327,8 @@ class LocationResolver:
         )
 
     def _resolve_zip(self, zip_code: str) -> ResolvedLocation:
+        """Offline lookup via pgeocode. Raises ValueError for a
+        well-formed but unrecognized zip code."""
         try:
             import pgeocode
             nomi = pgeocode.Nominatim("us")
@@ -341,6 +349,13 @@ class LocationResolver:
             raise RuntimeError("pgeocode required for zip lookup: pip install pgeocode")
 
     def _resolve_city(self, raw: str) -> list[ResolvedLocation]:
+        """
+        City-name resolution, tried in order: exact "city, ST" hit in
+        TOP_CITIES, then an unambiguous bare city name via
+        CITY_ONLY_INDEX, then a bare ambiguous city name (returns all
+        candidates), finally falling back to Nominatim for anything not in
+        the offline tables.
+        """
         normalized = self._normalize(raw)
 
         # 1. Direct hit: "denver, co" → TOP_CITIES["denver, co"]

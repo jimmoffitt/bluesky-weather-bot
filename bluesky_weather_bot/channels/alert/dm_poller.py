@@ -68,6 +68,7 @@ class DMAlertChannel(AlertChannel):
     # ------------------------------------------------------------------
 
     def start(self) -> None:
+        """Spawns the polling thread and returns immediately (non-blocking)."""
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._poll_loop,
@@ -78,6 +79,7 @@ class DMAlertChannel(AlertChannel):
         logger.info("[dm] Started — polling every %.0fs", self._poll_interval)
 
     def stop(self) -> None:
+        """Signals the polling thread to exit and waits for the current poll to finish."""
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=self._poll_interval + 2)
@@ -88,6 +90,11 @@ class DMAlertChannel(AlertChannel):
     # ------------------------------------------------------------------
 
     def _poll_loop(self) -> None:
+        """
+        Polling thread entry point: logs in once, then loops checking for
+        new DMs every poll_interval seconds until stop() is called.
+        Re-logs in automatically if a poll error looks auth-related.
+        """
         self._login()
         while not self._stop_event.is_set():
             try:
@@ -99,6 +106,8 @@ class DMAlertChannel(AlertChannel):
             self._stop_event.wait(timeout=self._poll_interval)
 
     def _login(self) -> None:
+        """Authenticates and sets up the chat-proxy client used for all
+        DM operations. On failure, logs the error and lets the next poll retry."""
         try:
             from atproto import Client
             self._client = Client()
@@ -113,6 +122,13 @@ class DMAlertChannel(AlertChannel):
             logger.error("[dm] Login failed: %s", exc)
 
     def _check_dms(self) -> None:
+        """
+        One poll cycle: fetches new events since the last cursor via
+        chat.bsky.convo.get_log, filters down to new inbound messages
+        (skipping the bot's own sends and already-seen IDs), and dispatches
+        an AlertRequest per message — a command (see _extract_command) or a
+        location request, whichever the text parses as.
+        """
         if self._chat_client is None:
             return
 
@@ -179,6 +195,8 @@ class DMAlertChannel(AlertChannel):
     # ------------------------------------------------------------------
 
     def _is_seen(self, msg_id: str) -> bool:
+        """Checks the in-memory set first, then the DB (if configured) —
+        see module docstring for why dedup is two-layered."""
         if msg_id in self._seen_ids:
             return True
         if self._db is not None:
@@ -189,6 +207,8 @@ class DMAlertChannel(AlertChannel):
         return False
 
     def _mark_seen(self, msg_id: str, convo_id: str) -> None:
+        """Records a message as processed in both dedup layers. Called
+        before dispatch (see _check_dms) so a crash mid-pipeline can't reprocess it."""
         self._seen_ids.add(msg_id)
         if self._db is not None:
             try:

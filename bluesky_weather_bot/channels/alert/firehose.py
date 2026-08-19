@@ -62,6 +62,7 @@ class FirehoseAlertChannel(AlertChannel):
     # ------------------------------------------------------------------
 
     def start(self) -> None:
+        """Spawns the listener thread and returns immediately (non-blocking)."""
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._run,
@@ -72,6 +73,7 @@ class FirehoseAlertChannel(AlertChannel):
         logger.info("[firehose] Started — watching for @%s mentions", self._bot_handle)
 
     def stop(self) -> None:
+        """Signals the listener thread to exit and waits up to 5s for it to finish."""
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
@@ -111,6 +113,13 @@ class FirehoseAlertChannel(AlertChannel):
         cpu_sampler = ThreadCPUSampler()
 
         def on_message(message: MessageFrame) -> None:
+            """
+            Per-commit callback, invoked synchronously by the atproto client
+            for every commit on the *entire* public network — filtering
+            down to bot-mentioning app.bsky.feed.post creates happens here,
+            which is the CAR/CBOR decode cost JetstreamAlertChannel avoids
+            (see mention_parsing.py and the README's backend comparison).
+            """
             self._last_message_at = time.monotonic()
             cpu_sampler.sample("firehose")
             if self._stop_event.is_set():
@@ -165,6 +174,8 @@ class FirehoseAlertChannel(AlertChannel):
                 logger.debug("[firehose] Skipping malformed message: %s", exc)
 
         def on_error(error: Exception) -> None:
+            """Connection-level error callback from the atproto client — the
+            outer while loop (below) does the actual reconnect."""
             if self._stop_event.is_set():
                 return
             logger.warning("[firehose] Connection error: %s — will reconnect", error)

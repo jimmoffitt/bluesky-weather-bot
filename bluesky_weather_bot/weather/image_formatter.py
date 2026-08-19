@@ -68,10 +68,12 @@ _CARDINAL = [
 
 
 def _deg_to_cardinal(deg: float) -> str:
+    """Converts a wind direction in degrees to a 16-point compass label (N, NNE, NE, ...)."""
     return _CARDINAL[round(deg / 22.5) % 16]
 
 
 def _hour_label(dt: datetime) -> str:
+    """Formats an hour as '12AM'/'10AM'/'12PM'/'1PM' etc. for card labels."""
     h = dt.hour
     if h == 0:
         return "12AM"
@@ -96,6 +98,9 @@ _FONT_SEARCH_DIRS = [
 
 
 def _find_font(name: str) -> Optional[str]:
+    """Searches the known system font directories (see _FONT_SEARCH_DIRS,
+    covers the Pi/Debian, Fedora, Arch, and macOS cases) for a font file by
+    name. Returns None if not found — callers fall back to Pillow's default."""
     for d in _FONT_SEARCH_DIRS:
         candidate = os.path.join(d, name)
         if os.path.isfile(candidate):
@@ -104,6 +109,9 @@ def _find_font(name: str) -> Optional[str]:
 
 
 def _font(size: int, bold: bool = False) -> ImageFont.ImageFont:
+    """DejaVu Sans loader — the fallback used by _font_syne/_font_mono
+    below when the bundled display fonts aren't available, and used
+    directly for anything that doesn't need the branded typefaces."""
     fname = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
     path = _find_font(fname)
     if path:
@@ -145,6 +153,7 @@ def _font_mono(size: int, medium: bool = False) -> ImageFont.ImageFont:
 # ---------------------------------------------------------------------------
 
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    """Converts a "#rrggbb" (or "rrggbb") color string to an (r, g, b) tuple for Pillow."""
     h = h.lstrip("#")
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
@@ -242,10 +251,13 @@ def _text_centered(draw: ImageDraw.ImageDraw, y: int, text: str,
 
 def _draw_hline(draw: ImageDraw.ImageDraw, y: int, width: int, fill: str,
                 margin: int = 40) -> None:
+    """Draws a horizontal divider line, inset by margin on each side."""
     draw.line([(margin, y), (width - margin, y)], fill=fill, width=2)
 
 
 def _new_card(w: int, h: int) -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    """Creates a blank card image + its draw context, filled with the
+    standard background color."""
     img = Image.new("RGB", (w, h), _hex_to_rgb(BG))
     draw = ImageDraw.Draw(img)
     return img, draw
@@ -265,6 +277,8 @@ def _header_bar(draw: ImageDraw.ImageDraw, width: int, h: int,
 
 
 def _to_png(img: Image.Image) -> bytes:
+    """Serializes a finished card to PNG bytes, ready for
+    BlueskyPostNotifyChannel to upload."""
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -275,6 +289,9 @@ def _to_png(img: Image.Image) -> bytes:
 # ---------------------------------------------------------------------------
 
 def _tz_abbr(timezone: str, ts: datetime) -> str:
+    """Converts an IANA timezone name to its short abbreviation for the
+    given timestamp (e.g. "America/Denver" → "MST" or "MDT" depending on
+    DST). Falls back to the last path segment of the IANA name on error."""
     try:
         from zoneinfo import ZoneInfo
         aware = ts.replace(tzinfo=ZoneInfo(timezone))
@@ -403,6 +420,14 @@ class WeatherImageFormatter:
         include_forecast: bool = False,
         include_day: bool = False,
     ) -> tuple[list[bytes], list[str], str]:
+        """
+        Main entry point: builds up to 3 PNG cards (current conditions
+        always included; forecast and "on this day" cards gated by
+        include_forecast/include_day) plus matching alt texts and a single
+        shared caption. layout="desktop" swaps in the wider card variants.
+        Returns (images, alts, caption) — images/alts are parallel lists
+        matched by index for BlueskyPostNotifyChannel's image post.
+        """
         images: list[bytes] = []
         alts:   list[str]   = []
 
@@ -496,9 +521,13 @@ class WeatherImageFormatter:
     # ------------------------------------------------------------------
 
     def _render_current_card(self, report: WeatherReport, units: str = "imperial") -> bytes:
-        # Portrait layout — optimised for phone viewing. Narrow with generous
-        # row height so the card reads as a vertical phone shape rather than
-        # square, closer to a native portrait screenshot's proportions.
+        """
+        Card 1 (default, always sent), phone/portrait layout — optimised
+        for phone viewing. Narrow with generous row height so the card
+        reads as a vertical phone shape rather than square, closer to a
+        native portrait screenshot's proportions. See
+        _render_current_card_desktop for the wide/landscape variant.
+        """
         W       = 640
         H_HDR   = 76    # header strip — single row: location · timestamp · badge
         TEMP_H  = 200   # room for the hero temp row + FEELS LIKE
@@ -700,6 +729,8 @@ class WeatherImageFormatter:
     # ------------------------------------------------------------------
 
     def _render_current_card_desktop(self, report: WeatherReport, units: str = "imperial") -> bytes:
+        """Card 1, desktop/landscape layout (layout="desktop") — same
+        content as _render_current_card, wider proportions for a monitor."""
         W      = 1200
         H_HDR  = 76
         ROW_H  = 78    # fixed per-stat-row height, matches the portrait card
@@ -901,6 +932,9 @@ class WeatherImageFormatter:
     # ------------------------------------------------------------------
 
     def _render_forecast_card(self, report: WeatherReport) -> bytes:
+        """Card 2 (/forecast), phone/portrait layout: 12-hour hourly rows
+        plus the year-ago/10-year-average historical comparison. See
+        _render_forecast_card_desktop for the wide/landscape variant."""
         MARGIN = 20
 
         hist = report.historical
@@ -972,6 +1006,9 @@ class WeatherImageFormatter:
         f_hr_pct   = _font_mono(13)
 
         def _draw_hourly_row(slots_row, row_y):
+            """Draws one row of hourly forecast columns (portrait card)
+            starting at row_y — closes over strip_left/col_w/H_HR_ROW etc.
+            from _render_forecast_card's local layout constants."""
             for i, slot in enumerate(slots_row):
                 cx = strip_left + i * col_w + col_w // 2
 
@@ -1132,6 +1169,8 @@ class WeatherImageFormatter:
             f_h_val = _font_mono(15)
 
             def _hist_block(rec: DailyHistoricalRecord, header: str, y0: int) -> int:
+                """Draws one historical-comparison block (year-ago or
+                10-yr-avg) starting at y0; returns the y position after it."""
                 draw.text((MARGIN, y0), header, font=f_h_hdr, fill=TEXT_SKY)
                 y0 += 22
                 draw.text(
@@ -1232,6 +1271,9 @@ class WeatherImageFormatter:
         draw.text((hr_x0, y + 8), "NEXT 12 HOURS", font=f_hr_lbl, fill=TEXT_MUT)
 
         def _draw_hr_row(slots_row, row_y):
+            """Desktop-card counterpart of _draw_hourly_row — same idea,
+            different local layout constants (hr_x0/col_w from
+            _render_forecast_card_desktop)."""
             for i, slot in enumerate(slots_row):
                 cx = hr_x0 + i * col_w + col_w // 2
                 if i > 0:
@@ -1360,6 +1402,7 @@ class WeatherImageFormatter:
             f_h_val = _font_mono(15)
 
             def _hist_block_r(rec: DailyHistoricalRecord, header: str, y0: int) -> int:
+                """Desktop-card counterpart of _hist_block."""
                 draw.text((day_x0, y0), header, font=f_h_hdr, fill=TEXT_SKY)
                 y0 += 22
                 draw.text(
@@ -1399,6 +1442,10 @@ class WeatherImageFormatter:
     def _caption(
         self, report: WeatherReport, include_forecast: bool = False, include_day: bool = False
     ) -> str:
+        """Builds the shared post caption/text (image mode's only visible
+        text besides the cards themselves) — current conditions summary
+        plus a pointer to whichever extra cards are included. Truncated to
+        300 chars (Bluesky's post limit)."""
         import re
         c   = report.current
         loc = report.location.display_name
@@ -1429,6 +1476,7 @@ class WeatherImageFormatter:
         return text[:300]
 
     def _alt_current(self, report: WeatherReport) -> str:
+        """Alt text for card 1 — screen-reader/accessibility description."""
         c = report.current
         return (
             f"Current conditions for {report.location.display_name}: "
@@ -1436,9 +1484,11 @@ class WeatherImageFormatter:
         )
 
     def _alt_forecast_card(self, report: WeatherReport) -> str:
+        """Alt text for card 2 — screen-reader/accessibility description."""
         return f"12-hour and 7-day forecast for {report.location.display_name}"
 
     def _alt_this_day_card(self, report: WeatherReport) -> str:
+        """Alt text for card 3 — screen-reader/accessibility description."""
         today = date.today()
         n = len(report.this_day_history)
         return (
@@ -1451,6 +1501,11 @@ class WeatherImageFormatter:
     # ------------------------------------------------------------------
 
     def _render_this_day_card(self, report: WeatherReport) -> bytes:
+        """Card 3 (/day): bar chart of this calendar date's high/low across
+        report.this_day_history's ~75 years of ERA5 archive data, with
+        record high/low and averages called out. Returns empty bytes if
+        there's no history data (caller in format_images already guards
+        this, but kept here too for direct-call safety)."""
         records = report.this_day_history
         if not records:
             return b""
@@ -1494,6 +1549,8 @@ class WeatherImageFormatter:
         y_range = y_max - y_min or 1
 
         def temp_to_y(t: float) -> int:
+            """Maps a temperature value to its pixel y-coordinate on the
+            chart, given this card's y_min/y_range/cy1/cy2 axis bounds."""
             return int(cy2 - (t - y_min) / y_range * (cy2 - cy1))
 
         # --- Y-axis gridlines + labels ---
@@ -1561,9 +1618,12 @@ class WeatherImageFormatter:
         f_small = _font_mono(13)
 
         def _stat(x, y, label, value, color=TEXT_PRI, swatch=None, swatch_kind="dot"):
-            # swatch echoes the chart mark this stat corresponds to — a dot
-            # for a record-year bar, a short line for an avg reference line —
-            # so the stats block doubles as the chart's legend.
+            """
+            Draws one label/value stat line. swatch echoes the chart mark
+            this stat corresponds to — a dot for a record-year bar, a short
+            line for an avg reference line — so the stats block doubles as
+            the chart's legend.
+            """
             lx = x
             if swatch:
                 sc = _hex_to_rgb(swatch)
