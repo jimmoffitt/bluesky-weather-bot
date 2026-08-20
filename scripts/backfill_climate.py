@@ -16,12 +16,18 @@ Usage examples:
     # Mix, 10 years (default), custom db path
     python3 scripts/backfill_climate.py --zips 80501 --cities "Denver, CO" --years 10
 
+    # Every city in archive/cities.py's TOP_200 list (~203 cities)
+    python3 scripts/backfill_climate.py --top200
+
     # Refresh nightly (just yesterday for all known locations)
     python3 scripts/backfill_climate.py --yesterday
 
 Options:
     --zips ZIPCODE ...        5-digit US zip codes
     --cities "City, ST" ...   City names (quote multi-word names)
+    --top200                  All cities in archive/cities.py's TOP_200 list —
+                               coordinates come straight from that table, no
+                               geocoding needed. Combines with --zips/--cities.
     --years N                 Years of history to fetch (default: 10)
     --db   PATH               Path to climate.db (default: data/climate.db)
     --yesterday               Only fetch yesterday's data for all locations in DB
@@ -40,6 +46,7 @@ from pathlib import Path
 # Allow running from project root without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from bluesky_weather_bot.archive.cities import TOP_200
 from bluesky_weather_bot.storage.climate_db import ClimateDatabase, location_key as make_key
 from bluesky_weather_bot.weather.archive_client import ArchiveClient
 from bluesky_weather_bot.weather.resolver import LocationResolver
@@ -87,6 +94,33 @@ def resolve_locations(raw_list: list[str]) -> list[dict]:
                 "timezone":     loc.timezone,
             })
             logger.info("Resolved %r → %s  (%s)", raw, loc.display_name, key)
+
+    return resolved
+
+
+def top200_locations() -> list[dict]:
+    """
+    Builds the resolved-location dict list (same shape as resolve_locations())
+    directly from archive/cities.py's TOP_200 table — no geocoding calls
+    needed since that table already has lat/lon/timezone/zip baked in.
+    """
+    resolved: list[dict] = []
+    seen_keys: set[str] = set()
+
+    for c in TOP_200:
+        key = make_key(c.lat, c.lon)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+
+        resolved.append({
+            "location_key": key,
+            "lat":          c.lat,
+            "lon":          c.lon,
+            "display_name": c.name,
+            "zip_code":     c.zip_code,
+            "timezone":     c.timezone,
+        })
 
     return resolved
 
@@ -210,6 +244,8 @@ def main() -> None:
     )
     parser.add_argument("--zips",      nargs="+", metavar="ZIP",    default=[])
     parser.add_argument("--cities",    nargs="+", metavar="CITY",   default=[])
+    parser.add_argument("--top200",    action="store_true",
+                        help="Backfill every city in archive/cities.py's TOP_200 list")
     parser.add_argument("--years",     type=int,  default=10,       metavar="N")
     parser.add_argument("--db",        default="data/climate.db",   metavar="PATH")
     parser.add_argument("--yesterday", action="store_true",
@@ -229,10 +265,17 @@ def main() -> None:
             return
 
         raw_locations = args.zips + args.cities
-        if not raw_locations:
-            parser.error("Provide at least one --zips or --cities location.")
+        if not raw_locations and not args.top200:
+            parser.error("Provide at least one --zips, --cities, or --top200.")
 
-        locations = resolve_locations(raw_locations)
+        locations = resolve_locations(raw_locations) if raw_locations else []
+        if args.top200:
+            seen_keys = {loc["location_key"] for loc in locations}
+            for loc in top200_locations():
+                if loc["location_key"] not in seen_keys:
+                    seen_keys.add(loc["location_key"])
+                    locations.append(loc)
+
         if not locations:
             logger.error("No locations resolved. Nothing to do.")
             sys.exit(1)
@@ -248,8 +291,9 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
             results.append(result)
-            # Brief pause between locations to be a good API citizen
-            if i < len(locations):
+            # Brief pause between locations to be a good API citizen —
+            # skipped in dry-run, which makes no API calls to pace.
+            if i < len(locations) and not args.dry_run:
                 time.sleep(0.5)
 
         # Summary
