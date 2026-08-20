@@ -45,6 +45,7 @@ class CurrentConditions:
     visibility_km: float
     surface_pressure_hpa: float
     weather_description: str
+    is_day: bool = True   # from Open-Meteo's is_day; drives day/night emoji choice
 
 
 @dataclass

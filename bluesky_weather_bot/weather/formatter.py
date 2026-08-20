@@ -42,34 +42,41 @@ def _hour_label(dt: datetime) -> str:
     return f"{h - 12}PM"
 
 
-def _weather_emoji(description: str) -> str:
-    """Maps a WMO weather description string to a matching emoji, by
-    keyword substring match (not an exact/enum lookup, since descriptions
-    like "Light rain" vs "Rain" vs "Heavy rain" should share one emoji)."""
+def _weather_emoji(description: str, is_day: bool = True) -> str:
+    """
+    Maps a WMO weather description string to a matching emoji, by keyword
+    substring match (not an exact/enum lookup, since descriptions like
+    "Light rain" vs "Rain" vs "Heavy rain" should share one emoji).
+
+    is_day swaps the clear/mostly-clear cases to night variants (crescent
+    moon, moon+stars) -- conditions that aren't sky-visibility-based
+    (rain, snow, thunder, fog) look the same regardless of time of day,
+    so only those two cases branch on it.
+    """
     d = description.lower()
     if "clear sky" in d:
-        return "\u2600\ufe0f"   # ☀️
+        return "\u2600\ufe0f" if is_day else "\U0001f319\u2728"      # sun : moon+sparkle
     if "mainly clear" in d:
-        return "\U0001f324"     # 🌤
+        return "\U0001f324" if is_day else "\U0001f319"                # sun-behind-cloud : moon
     if "partly" in d:
-        return "\u26c5"         # ⛅
+        return "\u26c5" if is_day else "\u2601\ufe0f\U0001f319"      # sun-cloud : cloud+moon
     if "overcast" in d:
-        return "\u2601\ufe0f"   # ☁️
+        return "\u2601\ufe0f"   # cloud
     if "fog" in d:
-        return "\U0001f32b"     # 🌫
+        return "\U0001f32b"     # fog
     if "drizzle" in d:
-        return "\U0001f326"     # 🌦
+        return "\U0001f326"     # sun-behind-rain-cloud
     if "freezing" in d:
-        return "\U0001f328"     # 🌨
+        return "\U0001f328"     # cloud-with-snow
     if "snow grains" in d or "snow showers" in d:
-        return "\U0001f328"     # 🌨
+        return "\U0001f328"     # cloud-with-snow
     if "snow" in d:
-        return "\u2744\ufe0f"   # ❄️
+        return "\u2744\ufe0f"   # snowflake
     if "rain" in d or "shower" in d:
-        return "\U0001f327"     # 🌧
+        return "\U0001f327"     # cloud-with-rain
     if "thunder" in d:
-        return "\u26c8\ufe0f"   # ⛈️
-    return "\U0001f324"         # 🌤 (default)
+        return "\u26c8\ufe0f"   # thunder-cloud
+    return "\U0001f324" if is_day else "\U0001f319"   # default: sun-behind-cloud : moon
 
 
 def _tz_abbr(timezone: str, ts: datetime) -> str:
@@ -125,7 +132,7 @@ class WeatherFormatter:
         ts_str = f"{wday} {month} {day} {hour}:{minute} {ampm} {tz}"
 
         cardinal = _deg_to_cardinal(c.wind_direction_deg)
-        emoji    = _weather_emoji(c.weather_description)
+        emoji    = _weather_emoji(c.weather_description, c.is_day)
 
         if units == "metric":
             temp_str  = f"🌡 {c.temperature_c:.0f}°C ({c.temperature_f:.0f}°F)"

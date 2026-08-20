@@ -42,7 +42,7 @@ ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 CURRENT_VARS = (
     "temperature_2m,apparent_temperature,relative_humidity_2m,"
     "cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,"
-    "precipitation,visibility,surface_pressure,weather_code"
+    "precipitation,visibility,surface_pressure,weather_code,is_day"
 )
 
 HOURLY_VARS = (
@@ -186,6 +186,7 @@ class WeatherClient:
             visibility_km=round(vis_m / 1000.0, 1) if vis_m else 0.0,
             surface_pressure_hpa=_f(c.get("surface_pressure")),
             weather_description=wmo_description(int(c.get("weather_code", 0))),
+            is_day=bool(c.get("is_day", 1)),
         )
 
     def _parse_forecast(self, data: dict) -> Forecast:

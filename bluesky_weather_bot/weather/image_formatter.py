@@ -30,6 +30,7 @@ from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
+from bluesky_weather_bot.weather.formatter import _weather_emoji
 from bluesky_weather_bot.weather.models import (
     WeatherReport,
     HistoricalComparison,
@@ -1175,8 +1176,8 @@ class WeatherImageFormatter:
                 y0 += 22
                 draw.text(
                     (MARGIN, y0),
-                    f"Hi {rec.temp_max_f:.0f}F ({rec.temp_max_c:.0f}C)  /  "
-                    f"Lo {rec.temp_min_f:.0f}F ({rec.temp_min_c:.0f}C)  |  "
+                    f"Hi {rec.temp_max_f:.0f}\u00b0F ({rec.temp_max_c:.0f}\u00b0C)  /  "
+                    f"Lo {rec.temp_min_f:.0f}\u00b0F ({rec.temp_min_c:.0f}\u00b0C)  |  "
                     f"Precip {rec.precipitation_in:.2f}in  |  "
                     f"Wind {rec.wind_speed_max_mph:.0f}mph",
                     font=f_h_val, fill=TEXT_PRI,
@@ -1407,8 +1408,8 @@ class WeatherImageFormatter:
                 y0 += 22
                 draw.text(
                     (day_x0, y0),
-                    f"Hi {rec.temp_max_f:.0f}F ({rec.temp_max_c:.0f}C)  /  "
-                    f"Lo {rec.temp_min_f:.0f}F ({rec.temp_min_c:.0f}C)  |  "
+                    f"Hi {rec.temp_max_f:.0f}\u00b0F ({rec.temp_max_c:.0f}\u00b0C)  /  "
+                    f"Lo {rec.temp_min_f:.0f}\u00b0F ({rec.temp_min_c:.0f}\u00b0C)  |  "
                     f"Precip {rec.precipitation_in:.2f}in  |  "
                     f"Wind {rec.wind_speed_max_mph:.0f}mph",
                     font=f_h_val, fill=TEXT_PRI,
@@ -1466,9 +1467,10 @@ class WeatherImageFormatter:
         else:
             tail = "Add /forecast or /day for more."
 
+        emoji = _weather_emoji(c.weather_description, c.is_day)
         text = (
-            f"{loc}: {c.weather_description}, "
-            f"{c.temperature_f:.0f}F ({c.temperature_c:.0f}C), "
+            f"{emoji} {loc}: {c.weather_description}, "
+            f"{c.temperature_f:.0f}°F ({c.temperature_c:.0f}°C), "
             f"humidity {c.humidity_pct:.0f}%, "
             f"wind {c.wind_speed_mph:.0f}mph {cardinal}.{tags}"
             f"\n\n{tail}"
@@ -1480,7 +1482,7 @@ class WeatherImageFormatter:
         c = report.current
         return (
             f"Current conditions for {report.location.display_name}: "
-            f"{c.temperature_f:.0f}F, {c.weather_description}"
+            f"{c.temperature_f:.0f}°F, {c.weather_description}"
         )
 
     def _alt_forecast_card(self, report: WeatherReport) -> str:
