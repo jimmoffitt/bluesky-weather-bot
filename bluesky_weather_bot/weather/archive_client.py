@@ -29,7 +29,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -106,14 +106,24 @@ _NON_FLOAT_FIELDS = {"weather_code", "sunrise", "sunset"}
 
 DAILY_VARS = ",".join(api_name for api_name, _ in DAILY_FIELD_MAP)
 
-# Open-Meteo free tier allows ~10 000 req/day and ~600/min. The 600/min
-# figure is an average, not a burst allowance — observed live: the
-# previous 0.2s/0.5s pacing between calls triggered real HTTP 429s
-# consistently (every one of the first 4 locations in a real --top200
-# run failed). 1.5s sustained (40/min) has a wide safety margin under
-# both limits; retries (below) are the real safety net regardless —
-# even a stray 429 no longer costs more than the one year it hit.
+# Open-Meteo free tier allows ~10 000 req/day and ~600/min — figures
+# that turned out to be far more optimistic than what's actually
+# survivable in practice. Observed live, in order:
+#   - 0.2s/0.5s pacing: every one of the first 4 locations failed outright
+#   - flat 1.5s pacing: still hit a sustained throttle episode bad enough
+#     to exhaust all 5 retries (5+10+20+40+80s = 155s) on a single year,
+#     twice, within the very first location
+# A fixed interval can't win this — too fast and it gets throttled, too
+# slow and it's needlessly conservative during calm periods. So pacing is
+# adaptive: MIN_REQUEST_INTERVAL_SEC is the starting point, but any 429
+# grows the *baseline* interval (not just that one retry's backoff), and
+# a run of clean successes relaxes it back down. See ArchiveClient's
+# _current_interval.
 MIN_REQUEST_INTERVAL_SEC = 1.5
+MAX_REQUEST_INTERVAL_SEC = 20.0
+INTERVAL_BACKOFF_MULTIPLIER = 1.8   # applied to the baseline on every 429
+INTERVAL_RELAX_AFTER = 8            # consecutive successes before easing off
+INTERVAL_RELAX_MULTIPLIER = 0.85
 DEFAULT_RETRY_WAIT_SEC = 5
 MAX_RETRIES = 5
 
@@ -128,9 +138,12 @@ class ArchiveClient:
         # exceeds Open-Meteo's daily call quota.
         self.call_count = 0
         # Rate-limiting is centralized here (not scattered across every
-        # caller's own sleep calls) so nothing can accidentally bypass it
-        # — see MIN_REQUEST_INTERVAL_SEC's comment for why this exists.
+        # caller's own sleep calls) so nothing can accidentally bypass it.
         self._last_request_at: Optional[float] = None
+        # Current baseline gap between requests — grows on 429s, relaxes
+        # after sustained success. See the module comment above.
+        self._current_interval = MIN_REQUEST_INTERVAL_SEC
+        self._consecutive_successes = 0
 
     def fetch_daily(
         self,
@@ -183,6 +196,7 @@ class ArchiveClient:
         skip_years: Optional[set[int]] = None,
         max_calls: Optional[int] = None,
         newest_first: bool = True,
+        on_year_complete: Optional[Callable[[list[dict]], None]] = None,
     ) -> list[dict]:
         """
         Convenience wrapper: fetch years years through yesterday, or the
@@ -200,6 +214,12 @@ class ArchiveClient:
         not an error) once self.call_count would reach it, so a
         multi-location backfill can respect a daily API-call quota and
         stop cleanly mid-location rather than mid-year-request.
+        on_year_complete, if given, is called with each year's records as
+        soon as they're fetched (not batched to the end) — lets the
+        caller persist progress incrementally, so a location that's
+        taking a long time (e.g. due to adaptive backoff after repeated
+        429s) doesn't lose everything already fetched if the process is
+        killed or crashes before the whole location finishes.
         """
         today      = date.today()
         yesterday  = today - timedelta(days=1)
@@ -263,6 +283,8 @@ class ArchiveClient:
                 )
                 continue
             all_records.extend(records)
+            if on_year_complete is not None:
+                on_year_complete(records)
 
         return all_records
 
@@ -273,10 +295,10 @@ class ArchiveClient:
     def _get(self, params: dict, attempt: int = 0) -> dict:
         """GET with exponential-backoff retry on rate limiting (HTTP 429)
         and transient network errors, up to MAX_RETRIES attempts. Every
-        real request — including retries — waits for
-        MIN_REQUEST_INTERVAL_SEC since the last one first."""
+        real request — including retries — waits for the current adaptive
+        interval (self._current_interval) since the last one first."""
         if self._last_request_at is not None:
-            wait = MIN_REQUEST_INTERVAL_SEC - (time.time() - self._last_request_at)
+            wait = self._current_interval - (time.time() - self._last_request_at)
             if wait > 0:
                 time.sleep(wait)
 
@@ -286,13 +308,17 @@ class ArchiveClient:
         self._last_request_at = time.time()
         try:
             with urllib.request.urlopen(url, timeout=30) as resp:
-                return json.loads(resp.read())
+                result = json.loads(resp.read())
+            self._on_request_success()
+            return result
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < MAX_RETRIES:
-                wait = DEFAULT_RETRY_WAIT_SEC * (2 ** attempt)
-                logger.warning("Rate limited; retrying in %ds (attempt %d)", wait, attempt + 1)
-                time.sleep(wait)
-                return self._get(params, attempt + 1)
+            if e.code == 429:
+                self._on_rate_limited()
+                if attempt < MAX_RETRIES:
+                    wait = DEFAULT_RETRY_WAIT_SEC * (2 ** attempt)
+                    logger.warning("Rate limited; retrying in %ds (attempt %d)", wait, attempt + 1)
+                    time.sleep(wait)
+                    return self._get(params, attempt + 1)
             raise
         except urllib.error.URLError as e:
             if attempt < MAX_RETRIES:
@@ -301,6 +327,33 @@ class ArchiveClient:
                 time.sleep(wait)
                 return self._get(params, attempt + 1)
             raise
+
+    def _on_request_success(self) -> None:
+        """After enough consecutive clean requests, ease the baseline
+        interval back down toward MIN_REQUEST_INTERVAL_SEC — a throttling
+        episode shouldn't leave every later request needlessly slow."""
+        self._consecutive_successes += 1
+        if (self._consecutive_successes >= INTERVAL_RELAX_AFTER
+                and self._current_interval > MIN_REQUEST_INTERVAL_SEC):
+            self._current_interval = max(
+                MIN_REQUEST_INTERVAL_SEC,
+                self._current_interval * INTERVAL_RELAX_MULTIPLIER,
+            )
+            self._consecutive_successes = 0
+            logger.debug("Pacing relaxed to %.1fs", self._current_interval)
+
+    def _on_rate_limited(self) -> None:
+        """A 429 means the *current baseline pace* is too fast, not just
+        that this one request was unlucky — grow it for every subsequent
+        request too, not only this retry's own backoff wait."""
+        self._consecutive_successes = 0
+        old = self._current_interval
+        self._current_interval = min(
+            MAX_REQUEST_INTERVAL_SEC,
+            self._current_interval * INTERVAL_BACKOFF_MULTIPLIER,
+        )
+        if self._current_interval > old:
+            logger.info("Pacing increased to %.1fs after rate limiting", self._current_interval)
 
     def _parse(
         self,

@@ -178,7 +178,18 @@ def backfill_location(
             zip_code=zip_code,
             timezone=loc.get("timezone"),
         )
-        records = client.fetch_daily_years(
+        # Inserted per-year as each one is fetched (not batched to the
+        # end) — a location stuck behind adaptive backoff after repeated
+        # 429s can take a long time; this way a kill/crash mid-location
+        # only loses whatever year was in flight, not everything already
+        # fetched for it.
+        inserted = 0
+
+        def _save_year(records: list[dict]) -> None:
+            nonlocal inserted
+            inserted += cdb.insert_daily_records(records)
+
+        client.fetch_daily_years(
             lat=loc["lat"],
             lon=loc["lon"],
             years=years,
@@ -188,8 +199,8 @@ def backfill_location(
             timezone=loc["timezone"],
             skip_years=skip_years,
             max_calls=max_calls,
+            on_year_complete=_save_year,
         )
-        inserted = cdb.insert_daily_records(records)
         climate_rows = cdb.compute_climate_stats(key, zip_code=zip_code, display_name=display_name)
         elapsed = time.time() - t0
 
