@@ -27,9 +27,35 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
 
+from bluesky_weather_bot.weather.archive_client import DAILY_FIELD_MAP
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CLIMATE_DB_PATH = Path("data/climate.db")
+
+# Column type for each weather_daily field not covered by the handful of
+# hand-declared columns (location_key, date, source, ...) — REAL for
+# everything except the couple of fields that aren't numeric.
+_DAILY_COLUMN_TYPES = {
+    "weather_code": "INTEGER",
+    "sunrise":       "TEXT",
+    "sunset":        "TEXT",
+}
+
+
+def _daily_column_ddl() -> str:
+    """
+    Generates the weather_daily column definitions from
+    archive_client.DAILY_FIELD_MAP — the single source of truth for what
+    daily fields exist, shared with the API request and response parser.
+    Keeps the schema, the fetch, and the insert from drifting out of sync
+    as fields are added.
+    """
+    lines = []
+    for _, db_col in DAILY_FIELD_MAP:
+        col_type = _DAILY_COLUMN_TYPES.get(db_col, "REAL")
+        lines.append(f"                {db_col:<28s} {col_type},")
+    return "\n".join(lines) + "\n"
 
 
 class ClimateDatabase:
@@ -94,20 +120,7 @@ class ClimateDatabase:
 
                 date                TEXT    NOT NULL,
                 -- YYYY-MM-DD
-
-                temp_max_f          REAL,
-                temp_min_f          REAL,
-                temp_mean_f         REAL,
-                precipitation_in    REAL,
-                -- liquid-equivalent inches (rain + melted snow)
-
-                snowfall_in         REAL,
-                -- snowfall in inches
-
-                wind_speed_max_mph  REAL,
-                weather_code        INTEGER,
-                -- dominant WMO weather code for the day
-
+""" + _daily_column_ddl() + """
                 source              TEXT    NOT NULL DEFAULT 'open-meteo-archive',
                 fetched_at          TEXT    NOT NULL,
 
@@ -265,20 +278,15 @@ class ClimateDatabase:
         if not records:
             return 0
         assert self._conn
+        # Column list built from the same DAILY_FIELD_MAP the schema and
+        # the API parser use, plus the handful of non-weather columns.
+        cols = ["location_key", "zip_code", "display_name", "date"] + \
+               [db_col for _, db_col in DAILY_FIELD_MAP] + \
+               ["source", "fetched_at"]
+        col_list  = ", ".join(cols)
+        placeholders = ", ".join(f":{c}" for c in cols)
         self._conn.executemany(
-            """
-            INSERT OR IGNORE INTO weather_daily (
-                location_key, zip_code, display_name, date,
-                temp_max_f, temp_min_f, temp_mean_f,
-                precipitation_in, snowfall_in, wind_speed_max_mph,
-                weather_code, source, fetched_at
-            ) VALUES (
-                :location_key, :zip_code, :display_name, :date,
-                :temp_max_f, :temp_min_f, :temp_mean_f,
-                :precipitation_in, :snowfall_in, :wind_speed_max_mph,
-                :weather_code, :source, :fetched_at
-            )
-            """,
+            f"INSERT OR IGNORE INTO weather_daily ({col_list}) VALUES ({placeholders})",
             records,
         )
         self._conn.commit()
@@ -308,6 +316,22 @@ class ClimateDatabase:
             (location_key,),
         ).fetchone()
         return (row["mn"], row["mx"]) if row else (None, None)
+
+    def get_years_present(self, location_key: str) -> set[int]:
+        """
+        Returns the set of calendar years that have at least one row for
+        this location. Unlike get_date_range() (min/max only), this is
+        exact per-year coverage — used by the backfill script to resume
+        without re-fetching years already stored, robust to a run that
+        stopped partway through a year rather than assuming an unbroken
+        min-to-max range.
+        """
+        assert self._conn
+        rows = self._conn.execute(
+            "SELECT DISTINCT substr(date, 1, 4) AS yr FROM weather_daily WHERE location_key = ?",
+            (location_key,),
+        ).fetchall()
+        return {int(r["yr"]) for r in rows}
 
     def get_daily_records(
         self,

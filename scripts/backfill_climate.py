@@ -7,17 +7,18 @@ Open-Meteo archive API, inserts into weather_daily, then computes
 location_climate records and averages for every day-of-year.
 
 Usage examples:
-    # Zip codes
+    # Zip codes, full history (1940-present, the default)
     python3 scripts/backfill_climate.py --zips 80501 80302 80203
 
-    # City names
-    python3 scripts/backfill_climate.py --cities "Denver, CO" "Boulder, CO"
+    # City names, capped to the last 10 years instead
+    python3 scripts/backfill_climate.py --cities "Denver, CO" "Boulder, CO" --years 10
 
-    # Mix, 10 years (default), custom db path
-    python3 scripts/backfill_climate.py --zips 80501 --cities "Denver, CO" --years 10
-
-    # Every city in archive/cities.py's TOP_200 list (~203 cities)
+    # Every city in archive/cities.py's TOP_200 list (~203 cities), full
+    # history — 17k+ calls, well over the 10,000/day free-tier quota, so
+    # this stops cleanly partway through and picks up where it left off
+    # (already-fetched years are skipped) on the next run:
     python3 scripts/backfill_climate.py --top200
+    python3 scripts/backfill_climate.py --top200   # next day, resumes
 
     # Refresh nightly (just yesterday for all known locations)
     python3 scripts/backfill_climate.py --yesterday
@@ -28,7 +29,14 @@ Options:
     --top200                  All cities in archive/cities.py's TOP_200 list —
                                coordinates come straight from that table, no
                                geocoding needed. Combines with --zips/--cities.
-    --years N                 Years of history to fetch (default: 10)
+    --years N                 Years of history to fetch, most recent N years.
+                               Default: full archive back to 1940 (ERA5's
+                               coverage start — uniform for every location).
+    --max-calls N              Stop cleanly once this many API calls have
+                               been made this run (default: 9500, just under
+                               Open-Meteo's 10,000/day free-tier cap). Not an
+                               error — re-run the same command to continue;
+                               years already in the DB are skipped.
     --db   PATH               Path to climate.db (default: data/climate.db)
     --yesterday               Only fetch yesterday's data for all locations in DB
     --dry-run                 Resolve locations and print plan, no API calls
@@ -42,6 +50,7 @@ import sys
 import time
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Optional
 
 # Allow running from project root without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -129,11 +138,16 @@ def backfill_location(
     cdb: ClimateDatabase,
     client: ArchiveClient,
     loc: dict,
-    years: int,
+    years: Optional[int],
     dry_run: bool = False,
+    max_calls: Optional[int] = None,
 ) -> dict:
     """
-    Fetch and store historical data for one location.
+    Fetch and store historical data for one location. Skips years already
+    present in the DB (see get_years_present()) except the current
+    calendar year, which is re-fetched every time since it's still
+    in progress and may have grown since the last run.
+
     Returns a result summary dict.
     """
     key          = loc["location_key"]
@@ -148,8 +162,11 @@ def backfill_location(
         )
 
     if dry_run:
-        logger.info("[dry-run] Would fetch %d years for %s", years, display_name)
+        span = f"{years} years" if years is not None else "full history (1940-present)"
+        logger.info("[dry-run] Would fetch %s for %s", span, display_name)
         return {"location": display_name, "status": "dry-run", "rows": 0}
+
+    skip_years = cdb.get_years_present(key) - {date.today().year}
 
     t0 = time.time()
     try:
@@ -169,6 +186,8 @@ def backfill_location(
             display_name=display_name,
             zip_code=zip_code,
             timezone=loc["timezone"],
+            skip_years=skip_years,
+            max_calls=max_calls,
         )
         inserted = cdb.insert_daily_records(records)
         climate_rows = cdb.compute_climate_stats(key, zip_code=zip_code, display_name=display_name)
@@ -246,7 +265,11 @@ def main() -> None:
     parser.add_argument("--cities",    nargs="+", metavar="CITY",   default=[])
     parser.add_argument("--top200",    action="store_true",
                         help="Backfill every city in archive/cities.py's TOP_200 list")
-    parser.add_argument("--years",     type=int,  default=10,       metavar="N")
+    parser.add_argument("--years",     type=int,  default=None,     metavar="N",
+                        help="Years of history, most recent N. Default: full archive to 1940.")
+    parser.add_argument("--max-calls", type=int,  default=9500,     metavar="N",
+                        help="Stop cleanly after this many API calls this run (default: 9500, "
+                             "just under the 10,000/day free-tier quota). Re-run to resume.")
     parser.add_argument("--db",        default="data/climate.db",   metavar="PATH")
     parser.add_argument("--yesterday", action="store_true",
                         help="Only fetch yesterday's data for all known locations")
@@ -280,15 +303,28 @@ def main() -> None:
             logger.error("No locations resolved. Nothing to do.")
             sys.exit(1)
 
-        print(f"\nBackfilling {len(locations)} location(s), {args.years} year(s) each\n")
+        span = f"{args.years} year(s)" if args.years is not None else "full history (1940-present)"
+        print(f"\nBackfilling {len(locations)} location(s), {span} each\n")
 
         results = []
+        quota_stopped = False
         for i, loc in enumerate(locations, 1):
+            if client.call_count >= args.max_calls:
+                remaining = len(locations) - i + 1
+                print(
+                    f"\nCall budget ({args.max_calls}) reached after {i - 1} location(s) — "
+                    f"stopping cleanly. {remaining} location(s) remain.\n"
+                    f"Re-run this exact command to continue — years already fetched are skipped."
+                )
+                quota_stopped = True
+                break
+
             print(f"[{i}/{len(locations)}] {loc['display_name']}")
             result = backfill_location(
                 cdb, client, loc,
                 years=args.years,
                 dry_run=args.dry_run,
+                max_calls=args.max_calls,
             )
             results.append(result)
             # Brief pause between locations to be a good API citizen —
@@ -301,7 +337,9 @@ def main() -> None:
         errs  = sum(1 for r in results if r["status"] == "error")
         total = sum(r.get("rows", 0) for r in results)
         print(f"\n{'─'*50}")
-        print(f"Done: {ok} succeeded, {errs} failed, {total:,} daily rows inserted")
+        print(f"Done: {ok} succeeded, {errs} failed, {total:,} daily rows inserted"
+              + (" (stopped early — quota reached)" if quota_stopped else ""))
+        print(f"API calls made this run: {client.call_count}")
 
         if not args.dry_run:
             print_stats(cdb)
