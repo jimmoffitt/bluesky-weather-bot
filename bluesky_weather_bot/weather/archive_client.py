@@ -127,6 +127,18 @@ INTERVAL_RELAX_MULTIPLIER = 0.85
 DEFAULT_RETRY_WAIT_SEC = 5
 MAX_RETRIES = 5
 
+# Even MAX_REQUEST_INTERVAL_SEC (20s, ~3/min — far under any published
+# limit) turned out insufficient once: observed live, three consecutive
+# *years* each burned all 5 retries (155s) and still failed, back to
+# back, after ~25 minutes of sustained activity. That's a qualitatively
+# different signal than an individual 429 — evidence of a longer-duration
+# server-side penalty that per-request backoff alone can't out-wait. So a
+# full retry exhaustion (not just a single 429) triggers its own,
+# separately-escalating cooldown before the next request is even
+# attempted, on top of the per-request interval above.
+EXHAUSTION_COOLDOWN_BASE_SEC = 60.0
+MAX_EXHAUSTION_COOLDOWN_SEC = 600.0
+
 
 class ArchiveClient:
     """Fetches multi-year daily weather records from Open-Meteo archive API."""
@@ -144,6 +156,9 @@ class ArchiveClient:
         # after sustained success. See the module comment above.
         self._current_interval = MIN_REQUEST_INTERVAL_SEC
         self._consecutive_successes = 0
+        # How many requests in a row have fully exhausted MAX_RETRIES —
+        # resets on any success, escalates the exhaustion cooldown below.
+        self._consecutive_exhaustions = 0
 
     def fetch_daily(
         self,
@@ -319,6 +334,7 @@ class ArchiveClient:
                     logger.warning("Rate limited; retrying in %ds (attempt %d)", wait, attempt + 1)
                     time.sleep(wait)
                     return self._get(params, attempt + 1)
+                self._on_exhausted()
             raise
         except urllib.error.URLError as e:
             if attempt < MAX_RETRIES:
@@ -333,6 +349,7 @@ class ArchiveClient:
         interval back down toward MIN_REQUEST_INTERVAL_SEC — a throttling
         episode shouldn't leave every later request needlessly slow."""
         self._consecutive_successes += 1
+        self._consecutive_exhaustions = 0
         if (self._consecutive_successes >= INTERVAL_RELAX_AFTER
                 and self._current_interval > MIN_REQUEST_INTERVAL_SEC):
             self._current_interval = max(
@@ -354,6 +371,28 @@ class ArchiveClient:
         )
         if self._current_interval > old:
             logger.info("Pacing increased to %.1fs after rate limiting", self._current_interval)
+
+    def _on_exhausted(self) -> None:
+        """
+        Called when a request is about to give up after MAX_RETRIES
+        straight 429s — a stronger signal than any single 429 that
+        per-request backoff isn't enough on its own. Sleeps a separate,
+        escalating cooldown (independent of self._current_interval)
+        before returning control to the caller, who will then either
+        skip this year/request or try the next one — either way, the
+        next attempt gets real breathing room instead of hitting the
+        same wall immediately.
+        """
+        wait = min(
+            EXHAUSTION_COOLDOWN_BASE_SEC * (2 ** self._consecutive_exhaustions),
+            MAX_EXHAUSTION_COOLDOWN_SEC,
+        )
+        self._consecutive_exhaustions += 1
+        logger.warning(
+            "All %d retries exhausted — cooling down %.0fs before the next request",
+            MAX_RETRIES, wait,
+        )
+        time.sleep(wait)
 
     def _parse(
         self,
