@@ -171,13 +171,17 @@ class ArchiveClient:
         timezone: str = "auto",
         skip_years: Optional[set[int]] = None,
         max_calls: Optional[int] = None,
+        newest_first: bool = True,
     ) -> list[dict]:
         """
         Convenience wrapper: fetch years years through yesterday, or the
         full archive back to EARLIEST_YEAR (1940) if years is None.
 
         Splits into annual chunks to stay within Open-Meteo's recommended
-        request size and to allow progress logging.
+        request size and to allow progress logging. newest_first (default)
+        fetches most-recent-year-first, so a multi-day backfill that gets
+        cut off by max_calls has the most relevant/recent decades done
+        first rather than sitting on 1940s data while recent years wait.
 
         skip_years omits years entirely (no API call at all) — used to
         resume a backfill without re-fetching years already in the DB.
@@ -191,9 +195,15 @@ class ArchiveClient:
         start_year = EARLIEST_YEAR if years is None else today.year - years
         skip_years = skip_years or set()
 
-        all_records: list[dict] = []
+        year_order = (
+            range(today.year, start_year - 1, -1) if newest_first
+            else range(start_year, today.year + 1)
+        )
 
-        for year in range(start_year, today.year + 1):
+        all_records: list[dict] = []
+        last_index = len(year_order) - 1
+
+        for idx, year in enumerate(year_order):
             if year in skip_years:
                 continue
             if max_calls is not None and self.call_count >= max_calls:
@@ -208,7 +218,12 @@ class ArchiveClient:
             if chunk_end > yesterday:
                 chunk_end = yesterday
             if chunk_start > yesterday:
-                break
+                # No data yet for this year (only possible for today.year,
+                # e.g. on Jan 1st before any of the new year has passed).
+                # continue, not break: in newest_first order this is the
+                # *first* iteration, and a break would wrongly skip every
+                # earlier year too.
+                continue
 
             logger.info(
                 "Fetching %s  %s → %s  (%s)",
@@ -228,7 +243,7 @@ class ArchiveClient:
             all_records.extend(records)
 
             # Be polite between annual requests
-            if year < today.year:
+            if idx < last_index:
                 time.sleep(0.2)
 
         return all_records
