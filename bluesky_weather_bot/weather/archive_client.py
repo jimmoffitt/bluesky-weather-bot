@@ -106,9 +106,16 @@ _NON_FLOAT_FIELDS = {"weather_code", "sunrise", "sunset"}
 
 DAILY_VARS = ",".join(api_name for api_name, _ in DAILY_FIELD_MAP)
 
-# Open-Meteo free tier allows ~10 000 req/day; this keeps us polite
-DEFAULT_RETRY_WAIT_SEC = 2
-MAX_RETRIES = 3
+# Open-Meteo free tier allows ~10 000 req/day and ~600/min. The 600/min
+# figure is an average, not a burst allowance — observed live: the
+# previous 0.2s/0.5s pacing between calls triggered real HTTP 429s
+# consistently (every one of the first 4 locations in a real --top200
+# run failed). 1.5s sustained (40/min) has a wide safety margin under
+# both limits; retries (below) are the real safety net regardless —
+# even a stray 429 no longer costs more than the one year it hit.
+MIN_REQUEST_INTERVAL_SEC = 1.5
+DEFAULT_RETRY_WAIT_SEC = 5
+MAX_RETRIES = 5
 
 
 class ArchiveClient:
@@ -120,6 +127,10 @@ class ArchiveClient:
         # fetch_daily_years()'s max_calls stop a backfill before it
         # exceeds Open-Meteo's daily call quota.
         self.call_count = 0
+        # Rate-limiting is centralized here (not scattered across every
+        # caller's own sleep calls) so nothing can accidentally bypass it
+        # — see MIN_REQUEST_INTERVAL_SEC's comment for why this exists.
+        self._last_request_at: Optional[float] = None
 
     def fetch_daily(
         self,
@@ -201,9 +212,8 @@ class ArchiveClient:
         )
 
         all_records: list[dict] = []
-        last_index = len(year_order) - 1
 
-        for idx, year in enumerate(year_order):
+        for year in year_order:
             if year in skip_years:
                 continue
             if max_calls is not None and self.call_count >= max_calls:
@@ -231,20 +241,28 @@ class ArchiveClient:
                 chunk_start, chunk_end,
                 f"{len(all_records)} rows so far",
             )
-            records = self.fetch_daily(
-                lat=lat, lon=lon,
-                start_date=chunk_start.isoformat(),
-                end_date=chunk_end.isoformat(),
-                location_key=location_key,
-                display_name=display_name,
-                zip_code=zip_code,
-                timezone=timezone,
-            )
+            try:
+                records = self.fetch_daily(
+                    lat=lat, lon=lon,
+                    start_date=chunk_start.isoformat(),
+                    end_date=chunk_end.isoformat(),
+                    location_key=location_key,
+                    display_name=display_name,
+                    zip_code=zip_code,
+                    timezone=timezone,
+                )
+            except Exception as exc:
+                # One year failing (e.g. retries exhausted on a stubborn
+                # 429) shouldn't sacrifice every other year already
+                # collected in all_records — log and move on. The failed
+                # year stays out of the DB, so it's simply not in
+                # get_years_present() next run and gets retried naturally.
+                logger.warning(
+                    "Failed to fetch %s year %d, skipping it this run: %s",
+                    display_name or location_key, year, exc,
+                )
+                continue
             all_records.extend(records)
-
-            # Be polite between annual requests
-            if idx < last_index:
-                time.sleep(0.2)
 
         return all_records
 
@@ -254,10 +272,18 @@ class ArchiveClient:
 
     def _get(self, params: dict, attempt: int = 0) -> dict:
         """GET with exponential-backoff retry on rate limiting (HTTP 429)
-        and transient network errors, up to MAX_RETRIES attempts."""
+        and transient network errors, up to MAX_RETRIES attempts. Every
+        real request — including retries — waits for
+        MIN_REQUEST_INTERVAL_SEC since the last one first."""
+        if self._last_request_at is not None:
+            wait = MIN_REQUEST_INTERVAL_SEC - (time.time() - self._last_request_at)
+            if wait > 0:
+                time.sleep(wait)
+
         url = ARCHIVE_URL + "?" + urllib.parse.urlencode(params)
         logger.debug("Archive API: %s", url)
         self.call_count += 1
+        self._last_request_at = time.time()
         try:
             with urllib.request.urlopen(url, timeout=30) as resp:
                 return json.loads(resp.read())

@@ -251,8 +251,6 @@ def backfill_yesterday(cdb: ClimateDatabase, client: ArchiveClient, dry_run: boo
         except Exception as e:
             logger.error("Failed to update %s: %s", display_name, e)
 
-        time.sleep(0.2)   # brief pause between locations
-
 
 def main() -> None:
     """CLI entry point: parses args, resolves the requested zips/cities,
@@ -327,10 +325,6 @@ def main() -> None:
                 max_calls=args.max_calls,
             )
             results.append(result)
-            # Brief pause between locations to be a good API citizen —
-            # skipped in dry-run, which makes no API calls to pace.
-            if i < len(locations) and not args.dry_run:
-                time.sleep(0.5)
 
         # Summary
         ok    = sum(1 for r in results if r["status"] == "ok")
