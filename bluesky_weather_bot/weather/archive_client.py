@@ -108,21 +108,23 @@ DAILY_VARS = ",".join(api_name for api_name, _ in DAILY_FIELD_MAP)
 
 # Open-Meteo free tier allows ~10 000 req/day and ~600/min — figures
 # that turned out to be far more optimistic than what's actually
-# survivable in practice. Observed live, in order:
+# survivable in practice. Observed live, escalating:
 #   - 0.2s/0.5s pacing: every one of the first 4 locations failed outright
-#   - flat 1.5s pacing: still hit a sustained throttle episode bad enough
-#     to exhaust all 5 retries (5+10+20+40+80s = 155s) on a single year,
-#     twice, within the very first location
-# A fixed interval can't win this — too fast and it gets throttled, too
-# slow and it's needlessly conservative during calm periods. So pacing is
-# adaptive: MIN_REQUEST_INTERVAL_SEC is the starting point, but any 429
-# grows the *baseline* interval (not just that one retry's backoff), and
-# a run of clean successes relaxes it back down. See ArchiveClient's
-# _current_interval.
-MIN_REQUEST_INTERVAL_SEC = 1.5
-MAX_REQUEST_INTERVAL_SEC = 20.0
+#   - flat 1.5s pacing: hit a sustained throttle bad enough to exhaust
+#     all 5 retries (155s) on a single year, twice, in the first location
+#   - adaptive 1.5s->20s: still hit THREE consecutive full exhaustions
+#     after ~25 minutes of sustained activity
+# The backfill is a one-time job with no time pressure — there is no
+# reason to run it anywhere near what the API can theoretically sustain.
+# MIN_REQUEST_INTERVAL_SEC is deliberately conservative (4/min) as the
+# starting point, not a target to push against; INTERVAL_BACKOFF_MULTIPLIER
+# still grows it further (up to MAX_REQUEST_INTERVAL_SEC) if even this
+# triggers a 429, and a run of clean successes relaxes it back down. See
+# ArchiveClient._current_interval.
+MIN_REQUEST_INTERVAL_SEC = 15.0
+MAX_REQUEST_INTERVAL_SEC = 60.0
 INTERVAL_BACKOFF_MULTIPLIER = 1.8   # applied to the baseline on every 429
-INTERVAL_RELAX_AFTER = 8            # consecutive successes before easing off
+INTERVAL_RELAX_AFTER = 15           # consecutive successes before easing off
 INTERVAL_RELAX_MULTIPLIER = 0.85
 DEFAULT_RETRY_WAIT_SEC = 5
 MAX_RETRIES = 5

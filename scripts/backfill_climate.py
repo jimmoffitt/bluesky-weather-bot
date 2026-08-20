@@ -20,8 +20,12 @@ Usage examples:
     python3 scripts/backfill_climate.py --top200
     python3 scripts/backfill_climate.py --top200   # next day, resumes
 
-    # Refresh nightly (just yesterday for all known locations)
-    python3 scripts/backfill_climate.py --yesterday
+    # Catch up every known location to yesterday — run this after the
+    # initial --top200 backfill finishes (locations may have finished on
+    # different days) or periodically afterward to keep the archive
+    # current. Fills each location's actual gap in one call, not just
+    # a fixed single day:
+    python3 scripts/backfill_climate.py --catchup
 
 Options:
     --zips ZIPCODE ...        5-digit US zip codes
@@ -38,7 +42,10 @@ Options:
                                error — re-run the same command to continue;
                                years already in the DB are skipped.
     --db   PATH               Path to climate.db (default: data/climate.db)
-    --yesterday               Only fetch yesterday's data for all locations in DB
+    --catchup                 Fetch each known location's gap between its
+                               latest stored date and yesterday (one call
+                               per location) — the lightweight keep-current
+                               operation, not the heavy one-time archive pull.
     --dry-run                 Resolve locations and print plan, no API calls
 """
 
@@ -220,16 +227,27 @@ def backfill_location(
         return {"location": display_name, "status": "error", "error": str(e)}
 
 
-def backfill_yesterday(cdb: ClimateDatabase, client: ArchiveClient, dry_run: bool) -> None:
-    """Fetch yesterday's data for every location already in the DB."""
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+def backfill_catchup(cdb: ClimateDatabase, client: ArchiveClient, dry_run: bool) -> None:
+    """
+    Fills each known location's actual gap — from the day after its
+    latest stored date through yesterday — not just a fixed single day.
+
+    A location whose data ends several days ago (e.g. because a
+    multi-day full backfill run finished on different days for different
+    locations) catches all the way up in one range request; a location
+    already current (latest_date == yesterday) is a no-op. One API call
+    per location regardless of gap size — this is the lightweight
+    keep-current operation, meant to run after the initial backfill (or
+    periodically afterward), not the heavy one-time archive pull.
+    """
+    yesterday = date.today() - timedelta(days=1)
     locations = cdb.list_locations()
 
     if not locations:
         logger.warning("No locations in climate.db yet. Run a full backfill first.")
         return
 
-    logger.info("Updating %d locations with data for %s", len(locations), yesterday)
+    logger.info("Checking %d location(s) for catch-up through %s", len(locations), yesterday)
 
     for loc_row in locations:
         key = loc_row["location_key"]
@@ -244,23 +262,34 @@ def backfill_yesterday(cdb: ClimateDatabase, client: ArchiveClient, dry_run: boo
         display_name = loc_row.get("display_name") or key
         zip_code     = loc_row.get("zip_code")
 
+        _, existing_end = cdb.get_date_range(key)
+        start = date.fromisoformat(existing_end) + timedelta(days=1) if existing_end else yesterday
+
+        if start > yesterday:
+            logger.info("%-30s already current (latest=%s)", display_name, existing_end)
+            continue
+
+        gap_days = (yesterday - start).days + 1
+
         if dry_run:
-            logger.info("[dry-run] Would fetch %s for %s", yesterday, display_name)
+            logger.info("[dry-run] Would fetch %s: %s → %s (%d day(s))",
+                        display_name, start, yesterday, gap_days)
             continue
 
         try:
             records = client.fetch_daily(
                 lat=lat, lon=lon,
-                start_date=yesterday, end_date=yesterday,
+                start_date=start.isoformat(), end_date=yesterday.isoformat(),
                 location_key=key,
                 display_name=display_name,
                 zip_code=zip_code,
             )
-            cdb.insert_daily_records(records)
+            inserted = cdb.insert_daily_records(records)
             cdb.compute_climate_stats(key, zip_code=zip_code, display_name=display_name)
-            logger.info("Updated %s for %s", yesterday, display_name)
+            logger.info("Caught up %-30s %s → %s  (%d day(s), %d rows)",
+                        display_name, start, yesterday, gap_days, inserted)
         except Exception as e:
-            logger.error("Failed to update %s: %s", display_name, e)
+            logger.error("Failed to catch up %s: %s", display_name, e)
 
 
 def main() -> None:
@@ -280,8 +309,9 @@ def main() -> None:
                         help="Stop cleanly after this many API calls this run (default: 9500, "
                              "just under the 10,000/day free-tier quota). Re-run to resume.")
     parser.add_argument("--db",        default="data/climate.db",   metavar="PATH")
-    parser.add_argument("--yesterday", action="store_true",
-                        help="Only fetch yesterday's data for all known locations")
+    parser.add_argument("--catchup",   action="store_true",
+                        help="Fetch each known location's gap through yesterday "
+                             "(one call per location) instead of a full backfill")
     parser.add_argument("--dry-run",   action="store_true",
                         help="Resolve locations and print plan without API calls")
     args = parser.parse_args()
@@ -291,8 +321,8 @@ def main() -> None:
 
     with ClimateDatabase(db_path) as cdb:
 
-        if args.yesterday:
-            backfill_yesterday(cdb, client, dry_run=args.dry_run)
+        if args.catchup:
+            backfill_catchup(cdb, client, dry_run=args.dry_run)
             print_stats(cdb)
             return
 
