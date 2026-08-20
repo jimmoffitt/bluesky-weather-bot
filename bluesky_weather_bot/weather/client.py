@@ -84,8 +84,19 @@ class WeatherClient:
         data["daily_forecast"] = data.pop("daily", {})
 
         if not skip_historical:
-            daily_data = self._fetch_daily(lat, lon, timezone)
-            data["daily"] = daily_data.get("daily", {})
+            try:
+                daily_data = self._fetch_daily(lat, lon, timezone)
+                data["daily"] = daily_data.get("daily", {})
+            except Exception as exc:
+                # The archive endpoint is separate infrastructure from the
+                # current/forecast one above, which has already succeeded
+                # by this point — a hiccup here (rate limiting, timeout)
+                # shouldn't cost the user their whole reply, just the
+                # historical-comparison section. _parse_historical() below
+                # already returns an empty HistoricalComparison when
+                # "daily" is missing from data, so simply not setting it
+                # degrades gracefully with no further change needed.
+                logger.warning("Historical archive fetch failed, omitting from reply: %s", exc)
 
         location = ResolvedLocation(
             lat=lat, lon=lon, display_name="", timezone=timezone
