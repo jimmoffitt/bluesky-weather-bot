@@ -121,10 +121,10 @@ DAILY_VARS = ",".join(api_name for api_name, _ in DAILY_FIELD_MAP)
 # still grows it further (up to MAX_REQUEST_INTERVAL_SEC) if even this
 # triggers a 429, and a run of clean successes relaxes it back down. See
 # ArchiveClient._current_interval.
-MIN_REQUEST_INTERVAL_SEC = 15.0
-MAX_REQUEST_INTERVAL_SEC = 60.0
+MIN_REQUEST_INTERVAL_SEC = 30.0
+MAX_REQUEST_INTERVAL_SEC = 90.0
 INTERVAL_BACKOFF_MULTIPLIER = 1.8   # applied to the baseline on every 429
-INTERVAL_RELAX_AFTER = 15           # consecutive successes before easing off
+INTERVAL_RELAX_AFTER = 20           # consecutive successes before easing off
 INTERVAL_RELAX_MULTIPLIER = 0.85
 DEFAULT_RETRY_WAIT_SEC = 5
 MAX_RETRIES = 5
