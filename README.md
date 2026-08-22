@@ -24,6 +24,9 @@ covers how it's built, how to run it, and how to deploy it.
 - **Personalize** your home location, display units, and image layout — once
   set, they apply to every future request on any channel.
 
+
+  Weather data is provided by a https://open-meteo.com/ API. 
+
 ## Triggering the bot
 
 | Method | Example |
