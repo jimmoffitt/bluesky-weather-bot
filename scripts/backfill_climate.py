@@ -19,11 +19,11 @@ Usage examples:
     # get the full 1940-present archive; every other city gets only
     # SHALLOW_HISTORY_START_YEAR-present (2000-) to keep total call volume
     # down. Pass an explicit --years to override this uniformly for every
-    # location instead. Stops cleanly if it runs into the daily quota (or
-    # a standing throttle) and picks up where it left off — already-fetched
-    # years are skipped — on the next run:
+    # location instead. Requests are paced to stay within ArchiveClient's
+    # DAILY_CALL_BUDGET of Open-Meteo's weighted daily quota, so a full run
+    # takes weeks, unattended. If it's stopped, re-running picks up where
+    # it left off (already-fetched years are skipped):
     python3 scripts/backfill_climate.py --top200
-    python3 scripts/backfill_climate.py --top200   # next day, resumes
 
     # Catch up every known location to yesterday — run this after the
     # initial --top200 backfill finishes (locations may have finished on
@@ -41,11 +41,11 @@ Options:
     --years N                 Years of history to fetch, most recent N years.
                                Default: full archive back to 1940 (ERA5's
                                coverage start — uniform for every location).
-    --max-calls N              Stop cleanly once this many API calls have
-                               been made this run (default: 9500, just under
-                               Open-Meteo's 10,000/day free-tier cap). Not an
-                               error — re-run the same command to continue;
-                               years already in the DB are skipped.
+    --max-calls N              Stop cleanly once this many API requests have
+                               been made this run (default: 9500). A whole-run
+                               cap, not the daily quota guard — that's the
+                               budget pacing in ArchiveClient. Not an error —
+                               re-run to continue; fetched years are skipped.
     --db   PATH               Path to climate.db (default: data/climate.db)
     --catchup                 Fetch each known location's gap between its
                                latest stored date and yesterday (one call
@@ -348,8 +348,8 @@ def main() -> None:
     parser.add_argument("--years",     type=int,  default=None,     metavar="N",
                         help="Years of history, most recent N. Default: full archive to 1940.")
     parser.add_argument("--max-calls", type=int,  default=9500,     metavar="N",
-                        help="Stop cleanly after this many API calls this run (default: 9500, "
-                             "just under the 10,000/day free-tier quota). Re-run to resume.")
+                        help="Stop cleanly after this many API requests this run (default: 9500). "
+                             "Daily-quota pacing is automatic. Re-run to resume.")
     parser.add_argument("--db",        default="data/climate.db",   metavar="PATH")
     parser.add_argument("--catchup",   action="store_true",
                         help="Fetch each known location's gap through yesterday "
@@ -424,7 +424,8 @@ def main() -> None:
         print(f"\n{'─'*50}")
         print(f"Done: {ok} succeeded, {errs} failed, {total:,} daily rows inserted"
               + (" (stopped early — quota reached)" if quota_stopped else ""))
-        print(f"API calls made this run: {client.call_count}")
+        print(f"API requests made this run: {client.call_count} "
+              f"(~{client.weighted_calls:,.0f} weighted calls against the quota)")
 
         if not args.dry_run:
             print_stats(cdb)

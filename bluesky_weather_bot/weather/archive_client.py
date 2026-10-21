@@ -104,61 +104,78 @@ DAILY_FIELD_MAP: list[tuple[str, str]] = [
 # Fields whose value should be stored as-is (int/text), not coerced to float
 _NON_FLOAT_FIELDS = {"weather_code", "sunrise", "sunset"}
 
-DAILY_VARS = ",".join(api_name for api_name, _ in DAILY_FIELD_MAP)
+# What we actually *request*. DAILY_FIELD_MAP above stays the schema (so
+# rows fetched back when we requested all 47 keep their extra columns), but
+# Open-Meteo bills by data volume — see request_weight() — and 47 variables
+# cost 4.7x what 10 do. These ten cover everything the bot reads today
+# (climate stats: high/low/mean temp, precip, snow) plus a few cheap extras.
+# Keep this at <= 10: the 11th variable raises the cost of every request.
+REQUESTED_DAILY_FIELDS = [
+    "temperature_2m_max",
+    "temperature_2m_min",
+    "temperature_2m_mean",
+    "precipitation_sum",
+    "snowfall_sum",
+    "rain_sum",
+    "weather_code",
+    "wind_speed_10m_max",
+    "wind_gusts_10m_max",
+    "relative_humidity_2m_mean",
+]
+assert set(REQUESTED_DAILY_FIELDS) <= {api for api, _ in DAILY_FIELD_MAP}
 
-# Open-Meteo free tier allows ~10 000 req/day and ~600/min — figures
-# that turned out to be far more optimistic than what's actually
-# survivable in practice. Observed live, escalating:
-#   - 0.2s/0.5s pacing: every one of the first 4 locations failed outright
-#   - flat 1.5s pacing: hit a sustained throttle bad enough to exhaust
-#     all 5 retries (155s) on a single year, twice, in the first location
-#   - adaptive 1.5s->20s: still hit THREE consecutive full exhaustions
-#     after ~25 minutes of sustained activity
-# The backfill is a one-time job with no time pressure — there is no
-# reason to run it anywhere near what the API can theoretically sustain.
-# MIN_REQUEST_INTERVAL_SEC is deliberately conservative (1/min) as the
-# starting point, not a target to push against; INTERVAL_BACKOFF_MULTIPLIER
-# still grows it further (up to MAX_REQUEST_INTERVAL_SEC) if even this
-# triggers a 429, and a run of clean successes relaxes it back down. See
-# ArchiveClient._current_interval.
+DAILY_VARS = ",".join(REQUESTED_DAILY_FIELDS)
+
+# Open-Meteo's free tier is 600 / 5,000 / 10,000 calls per minute / hour /
+# day, but a "call" is weighted by data volume, not counted per request:
+# one call = up to 10 variables x 2 weeks x 1 location, scaled fractionally
+# beyond that (open-meteo.com/en/pricing). A one-year request for 47
+# variables was therefore ~122 calls, so the 10,000/day quota ran out after
+# ~80 requests no matter how slowly they were sent — that, not request
+# pacing, was behind every multi-hour 429 block seen in Aug and Oct 2026.
 #
-# Bumped from 30s/90s to 60s/180s on 2026-08-21 after Los Angeles hit a
-# multi-hour standing block (39 straight full-retry exhaustions) that even
-# the old 90s ceiling never recovered from — a fresh probe at a flat 60s
-# interval also failed instantly, confirming it wasn't purely about pacing.
-# Went slower anyway per user request, and because a long rest period
-# (~13.5 hours, spanning a UTC day rollover) is what actually cleared it.
+# So pacing is now derived from the budget: each request waits long enough
+# that weighted spend averages DAILY_CALL_BUDGET per day, spread evenly.
+# The budget deliberately leaves headroom under 10,000 because the live
+# bot's own historical lookups (weather/client.py, ~27 calls per reply)
+# come out of the same per-IP quota.
+FREE_TIER_DAILY_CALLS = 10_000
+DAILY_CALL_BUDGET = 7_000
+
+# Floor on the gap between requests, and the 429 safety net on top of the
+# budget pacing: a 429 still grows the interval (up to the max) and a run
+# of clean successes relaxes it back down. See ArchiveClient._get.
 MIN_REQUEST_INTERVAL_SEC = 60.0
-MAX_REQUEST_INTERVAL_SEC = 180.0
+MAX_REQUEST_INTERVAL_SEC = 900.0
 INTERVAL_BACKOFF_MULTIPLIER = 1.8   # applied to the baseline on every 429
 INTERVAL_RELAX_AFTER = 20           # consecutive successes before easing off
 INTERVAL_RELAX_MULTIPLIER = 0.85
 DEFAULT_RETRY_WAIT_SEC = 5
 MAX_RETRIES = 5
 
-# Even MAX_REQUEST_INTERVAL_SEC (20s, ~3/min — far under any published
-# limit) turned out insufficient once: observed live, three consecutive
-# *years* each burned all 5 retries (155s) and still failed, back to
-# back, after ~25 minutes of sustained activity. That's a qualitatively
-# different signal than an individual 429 — evidence of a longer-duration
-# server-side penalty that per-request backoff alone can't out-wait. So a
-# full retry exhaustion (not just a single 429) triggers its own,
-# separately-escalating cooldown before the next request is even
-# attempted, on top of the per-request interval above.
+# A full retry exhaustion (not just one 429) most likely means the daily
+# quota is spent, which per-request backoff can't out-wait, so it triggers
+# its own, separately-escalating cooldown before the next attempt.
 EXHAUSTION_COOLDOWN_BASE_SEC = 60.0
 MAX_EXHAUSTION_COOLDOWN_SEC = 900.0
 
-# Both multi-hour standing blocks observed so far (Los Angeles on 2026-08-21,
-# Chicago on 2026-08-22) started within minutes of 07:13-08:34 local (Pi
-# system time, America/Denver) — thin evidence from two data points, but
-# free to guard against since this is a one-time job with no time pressure.
-# Padded generously around the two observed times rather than tuned tightly
-# to them. If this turns out not to correlate with anything real, it just
-# costs a skipped hour a day; it does not fix a true pacing/quota problem.
-BLACKOUT_START_HOUR = 6
-BLACKOUT_START_MINUTE = 30
-BLACKOUT_END_HOUR = 9
-BLACKOUT_END_MINUTE = 30
+
+def request_weight(n_vars: int, n_days: int) -> float:
+    """Open-Meteo's billed cost of one request, in API calls: 1.0 covers
+    up to 10 variables x 14 days, scaled fractionally beyond either
+    (e.g. 15 vars x 4 weeks = 1.5 x 2 = 3.0). See open-meteo.com/en/pricing."""
+    return (max(n_vars, 10) / 10) * (max(n_days, 14) / 14)
+
+
+def _params_weight(params: dict) -> float:
+    """request_weight() for a set of archive query params."""
+    n_vars = len([v for v in params.get("daily", "").split(",") if v])
+    try:
+        n_days = (date.fromisoformat(params["end_date"])
+                  - date.fromisoformat(params["start_date"])).days + 1
+    except (KeyError, ValueError):
+        n_days = 14
+    return request_weight(n_vars, n_days)
 
 
 class ArchiveClient:
@@ -170,6 +187,9 @@ class ArchiveClient:
         # fetch_daily_years()'s max_calls stop a backfill before it
         # exceeds Open-Meteo's daily call quota.
         self.call_count = 0
+        # Billed cost of those requests (see request_weight) — what the
+        # daily quota actually counts.
+        self.weighted_calls = 0.0
         # Rate-limiting is centralized here (not scattered across every
         # caller's own sleep calls) so nothing can accidentally bypass it.
         self._last_request_at: Optional[float] = None
@@ -328,35 +348,24 @@ class ArchiveClient:
     # Internal
     # ------------------------------------------------------------------
 
-    def _wait_out_blackout_window(self) -> None:
-        """Sleep until BLACKOUT_END_HOUR:BLACKOUT_END_MINUTE if we're
-        currently inside the suspected high-risk local-time window. See the
-        BLACKOUT_* constants for why this window specifically."""
-        now = datetime.now()
-        start = now.replace(hour=BLACKOUT_START_HOUR, minute=BLACKOUT_START_MINUTE, second=0, microsecond=0)
-        end = now.replace(hour=BLACKOUT_END_HOUR, minute=BLACKOUT_END_MINUTE, second=0, microsecond=0)
-        if start <= now < end:
-            wait = (end - now).total_seconds()
-            logger.info(
-                "Pausing %.0fs to sit out the %02d:%02d-%02d:%02d local blackout window",
-                wait, BLACKOUT_START_HOUR, BLACKOUT_START_MINUTE, BLACKOUT_END_HOUR, BLACKOUT_END_MINUTE,
-            )
-            time.sleep(wait)
-
     def _get(self, params: dict, attempt: int = 0) -> dict:
         """GET with exponential-backoff retry on rate limiting (HTTP 429)
         and transient network errors, up to MAX_RETRIES attempts. Every
-        real request — including retries — waits for the current adaptive
-        interval (self._current_interval) since the last one first."""
-        self._wait_out_blackout_window()
+        real request — including retries — first waits the longer of the
+        current adaptive interval and this request's share of the daily
+        budget (see DAILY_CALL_BUDGET) since the last one."""
+        weight = _params_weight(params)
         if self._last_request_at is not None:
-            wait = self._current_interval - (time.time() - self._last_request_at)
+            budget_interval = 86_400 * weight / DAILY_CALL_BUDGET
+            interval = max(self._current_interval, budget_interval)
+            wait = interval - (time.time() - self._last_request_at)
             if wait > 0:
                 time.sleep(wait)
 
         url = ARCHIVE_URL + "?" + urllib.parse.urlencode(params)
-        logger.debug("Archive API: %s", url)
+        logger.debug("Archive API (%.1f calls): %s", weight, url)
         self.call_count += 1
+        self.weighted_calls += weight
         self._last_request_at = time.time()
         try:
             with urllib.request.urlopen(url, timeout=30) as resp:
