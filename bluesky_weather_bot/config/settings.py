@@ -52,6 +52,10 @@ class Settings:
     # Server identification (shown in latency footer)
     server_type: str  # "laptop" | "Pi"
 
+    # Log rotation: keeps at most log_max_mb × (1 + log_backup_count) on disk
+    log_max_mb: float = 10.0
+    log_backup_count: int = 3
+
     @classmethod
     def load(cls, env_file: str | Path = ".local.env") -> "Settings":
         """
@@ -105,6 +109,8 @@ class Settings:
             skip_historical=opt_bool("SKIP_HISTORICAL", False),
             post_mode=opt("POST_MODE", "text").lower(),
             server_type=opt("SERVER_TYPE", "laptop"),
+            log_max_mb=opt_float("LOG_MAX_MB", 10.0),
+            log_backup_count=opt_int("LOG_BACKUP_COUNT", 3),
             mention_backends=_req_choice_set(
                 opt("MENTION_BACKEND", "firehose").lower(),
                 "MENTION_BACKEND", {"firehose", "jetstream"},

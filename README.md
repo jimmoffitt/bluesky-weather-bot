@@ -440,6 +440,8 @@ All settings are loaded from `.local.env` (gitignored). Copy
 | `INBOX_POLL_INTERVAL_SEC` | `5.0` | How often to check the inbox directory |
 | `LOG_PATH` | `logs/zipwx.log` | Log file path |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `LOG_MAX_MB` | `10` | Rotate the log file at this size |
+| `LOG_BACKUP_COUNT` | `3` | Rotated log files to keep (`zipwx.log.1` …) |
 
 ## Testing
 

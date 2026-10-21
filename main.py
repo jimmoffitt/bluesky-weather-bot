@@ -11,6 +11,7 @@ Or install and run as a module:
 """
 
 import logging
+import logging.handlers
 import sys
 from pathlib import Path
 
@@ -36,19 +37,28 @@ from bot import build_bot
 
 def setup_logging(settings: Settings) -> None:
     """Configures root logging to write to both stdout (for `journalctl
-    -f`/foreground runs) and settings.log_path, at settings.log_level."""
+    -f`/foreground runs) and settings.log_path, at settings.log_level.
+    The file rotates at LOG_MAX_MB, keeping LOG_BACKUP_COUNT old files."""
     log_path = settings.log_path
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     handlers = [
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_path),
+        logging.handlers.RotatingFileHandler(
+            log_path,
+            maxBytes=int(settings.log_max_mb * 1024 * 1024),
+            backupCount=settings.log_backup_count,
+        ),
     ]
     logging.basicConfig(
         level=getattr(logging, settings.log_level, logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=handlers,
     )
+    # httpx logs every request at INFO — with the DM poller hitting getLog
+    # every 5s that was ~95% of all log volume. Keep its warnings/errors.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def main() -> None:
