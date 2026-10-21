@@ -202,6 +202,22 @@ class ClimateDatabase:
 
             CREATE INDEX IF NOT EXISTS idx_locations_zip
                 ON locations(zip_code);
+
+            -- --------------------------------------------------------
+            -- field_fills: which weather_daily columns have been fetched
+            -- after the fact (backfill_climate.py --fill-extras), per
+            -- location-year, and through what date. Lets a column the API
+            -- genuinely returns as null be recorded as attempted rather
+            -- than re-requested on every run.
+            -- --------------------------------------------------------
+            CREATE TABLE IF NOT EXISTS field_fills (
+                location_key    TEXT    NOT NULL,
+                year            INTEGER NOT NULL,
+                column_name     TEXT    NOT NULL,
+                through_date    TEXT    NOT NULL,   -- latest date the fill covered
+                filled_at       TEXT    NOT NULL,
+                PRIMARY KEY (location_key, year, column_name)
+            );
         """)
         self._conn.commit()
 
@@ -332,6 +348,77 @@ class ClimateDatabase:
             (location_key,),
         ).fetchall()
         return {int(r["yr"]) for r in rows}
+
+    # ------------------------------------------------------------------
+    # field_fills — filling extra columns for years already stored
+    # ------------------------------------------------------------------
+
+    def get_unfilled_years(self, location_key: str, columns: list[str]) -> dict[int, set[str]]:
+        """
+        For each year with stored rows, which of columns still need
+        fetching: the column has NULLs in that year, and no field_fills
+        entry covers the year's latest NULL date. Rows that already have
+        values (e.g. years fetched back when all 47 variables were
+        requested) never need filling, with or without a fill record.
+        """
+        assert self._conn
+        known = {c for _, c in DAILY_FIELD_MAP}
+        fills = {
+            (r["year"], r["column_name"]): r["through_date"]
+            for r in self._conn.execute(
+                "SELECT year, column_name, through_date FROM field_fills WHERE location_key = ?",
+                (location_key,),
+            )
+        }
+        needed: dict[int, set[str]] = {}
+        for col in columns:
+            if col not in known:
+                raise ValueError(f"Unknown weather_daily column: {col}")
+            for r in self._conn.execute(
+                f"SELECT CAST(substr(date, 1, 4) AS INTEGER) AS yr, MAX(date) AS last_null "
+                f"FROM weather_daily WHERE location_key = ? AND {col} IS NULL GROUP BY yr",
+                (location_key,),
+            ):
+                covered = fills.get((r["yr"], col))
+                if covered is None or covered < r["last_null"]:
+                    needed.setdefault(r["yr"], set()).add(col)
+        return needed
+
+    def update_daily_fields(self, records: list[dict], columns: list[str]) -> int:
+        """
+        Sets only columns on rows that already exist (matched on
+        location_key + date), leaving every other column untouched.
+        Records for dates not in the table are ignored, not inserted.
+        Returns the number of rows updated.
+        """
+        if not records or not columns:
+            return 0
+        assert self._conn
+        known = {c for _, c in DAILY_FIELD_MAP}
+        bad = set(columns) - known
+        if bad:
+            raise ValueError(f"Unknown weather_daily columns: {sorted(bad)}")
+        sets = ", ".join(f"{c} = :{c}" for c in columns)
+        cur = self._conn.executemany(
+            f"UPDATE weather_daily SET {sets} WHERE location_key = :location_key AND date = :date",
+            records,
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def record_field_fill(
+        self, location_key: str, year: int, columns: list[str], through_date: str,
+    ) -> None:
+        """Marks columns as fetched for location_key/year through through_date."""
+        assert self._conn
+        now = _now()
+        self._conn.executemany(
+            "INSERT INTO field_fills (location_key, year, column_name, through_date, filled_at) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(location_key, year, column_name) DO UPDATE SET "
+            "through_date = excluded.through_date, filled_at = excluded.filled_at",
+            [(location_key, year, c, through_date, now) for c in columns],
+        )
+        self._conn.commit()
 
     def get_daily_records(
         self,

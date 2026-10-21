@@ -126,6 +126,55 @@ assert set(REQUESTED_DAILY_FIELDS) <= {api for api, _ in DAILY_FIELD_MAP}
 
 DAILY_VARS = ",".join(REQUESTED_DAILY_FIELDS)
 
+API_TO_COLUMN = dict(DAILY_FIELD_MAP)
+
+# The other 37 schema fields, grouped by theme for `backfill_climate.py
+# --fill-extras`, which fills them in later for years already stored. Groups
+# are for *choosing* what to fill; pack_fields() decides how fields are
+# batched into requests, since a request is billed as at least 10 variables
+# no matter how few it asks for.
+EXTRA_FIELD_GROUPS: dict[str, list[str]] = {
+    "humidity": [
+        "dew_point_2m_mean", "dew_point_2m_max", "dew_point_2m_min",
+        "relative_humidity_2m_max", "relative_humidity_2m_min",
+        "wet_bulb_temperature_2m_mean",
+        "apparent_temperature_max", "apparent_temperature_min", "apparent_temperature_mean",
+    ],
+    "pressure": [
+        "pressure_msl_mean", "pressure_msl_max", "pressure_msl_min",
+        "surface_pressure_mean", "surface_pressure_max", "surface_pressure_min",
+    ],
+    "sky": [
+        "cloud_cover_mean", "cloud_cover_max", "cloud_cover_min",
+        "sunshine_duration", "daylight_duration", "shortwave_radiation_sum",
+        "sunrise", "sunset",
+    ],
+    "wind": [
+        "wind_speed_10m_mean", "wind_gusts_10m_mean", "wind_direction_10m_dominant",
+    ],
+    "soil": [
+        "soil_moisture_0_to_7cm_mean", "soil_moisture_7_to_28cm_mean",
+        "soil_moisture_28_to_100cm_mean", "soil_moisture_100_to_255cm_mean",
+        "soil_temperature_0_to_7cm_mean", "soil_temperature_7_to_28cm_mean",
+        "soil_temperature_28_to_100cm_mean", "soil_temperature_100_to_255cm_mean",
+    ],
+    "agriculture": [
+        "et0_fao_evapotranspiration", "growing_degree_days_base_0_limit_50",
+        "precipitation_hours",
+    ],
+}
+assert sorted(f for g in EXTRA_FIELD_GROUPS.values() for f in g) == sorted(
+    api for api, _ in DAILY_FIELD_MAP if api not in REQUESTED_DAILY_FIELDS
+), "EXTRA_FIELD_GROUPS must cover every non-core field exactly once"
+
+MAX_VARS_PER_REQUEST = 10
+
+
+def pack_fields(api_names: list[str], per_request: int = MAX_VARS_PER_REQUEST) -> list[list[str]]:
+    """Splits fields into request-sized batches, preserving order. Packing
+    full batches matters: a 3-variable request costs the same as 10."""
+    return [api_names[i:i + per_request] for i in range(0, len(api_names), per_request)]
+
 # Open-Meteo's free tier is 600 / 5,000 / 10,000 calls per minute / hour /
 # day, but a "call" is weighted by data volume, not counted per request:
 # one call = up to 10 variables x 2 weeks x 1 location, scaled fractionally
@@ -211,9 +260,12 @@ class ArchiveClient:
         display_name: Optional[str] = None,
         zip_code: Optional[str] = None,
         timezone: str = "auto",
+        fields: Optional[list[str]] = None,
     ) -> list[dict]:
         """
         Fetch daily historical records for a location and date range.
+        fields (Open-Meteo API names) overrides the default request of
+        REQUESTED_DAILY_FIELDS; schema columns not requested come back None.
 
         Returns a list of dicts ready for ClimateDatabase.insert_daily_records().
         Fields: location_key, zip_code, display_name, date,
@@ -226,7 +278,7 @@ class ArchiveClient:
             "longitude":         lon,
             "start_date":        start_date,
             "end_date":          end_date,
-            "daily":             DAILY_VARS,
+            "daily":             ",".join(fields) if fields else DAILY_VARS,
             "temperature_unit":  "fahrenheit",
             "wind_speed_unit":   "mph",
             "precipitation_unit": "inch",

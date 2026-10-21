@@ -32,6 +32,14 @@ Usage examples:
     # a fixed single day:
     python3 scripts/backfill_climate.py --catchup
 
+    # Fill in the non-core variables (see archive_client.EXTRA_FIELD_GROUPS)
+    # for years already stored. Updates existing rows in place; never adds
+    # rows or touches the core 10. Defaults to every group, every stored
+    # location, biggest cities first. --dry-run prints the cost estimate:
+    python3 scripts/backfill_climate.py --fill-extras --dry-run
+    python3 scripts/backfill_climate.py --fill-extras humidity pressure
+    python3 scripts/backfill_climate.py --fill-extras --cities "Denver, CO"
+
 Options:
     --zips ZIPCODE ...        5-digit US zip codes
     --cities "City, ST" ...   City names (quote multi-word names)
@@ -51,13 +59,23 @@ Options:
                                latest stored date and yesterday (one call
                                per location) — the lightweight keep-current
                                operation, not the heavy one-time archive pull.
+    --fill-extras [GROUP ...] Fill non-core variables for years already in the
+                               DB, by group (default: all groups). Combines
+                               with --zips/--cities/--top200 to limit which
+                               locations; otherwise every stored location.
     --dry-run                 Resolve locations and print plan, no API calls
+
+Only one non-dry-run backfill may run at a time (they'd share, and
+together overspend, Open-Meteo's daily quota) — enforced with a lock file
+next to the database.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import logging
+import os
 import sys
 import time
 from datetime import date, timedelta
@@ -69,7 +87,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bluesky_weather_bot.archive.cities import TOP_200
 from bluesky_weather_bot.storage.climate_db import ClimateDatabase, location_key as make_key
-from bluesky_weather_bot.weather.archive_client import ArchiveClient
+from bluesky_weather_bot.weather.archive_client import (
+    API_TO_COLUMN, DAILY_CALL_BUDGET, EXTRA_FIELD_GROUPS, ArchiveClient,
+    pack_fields, request_weight,
+)
 from bluesky_weather_bot.weather.resolver import LocationResolver
 
 logging.basicConfig(
@@ -334,6 +355,137 @@ def backfill_catchup(cdb: ClimateDatabase, client: ArchiveClient, dry_run: bool)
             logger.error("Failed to catch up %s: %s", display_name, e)
 
 
+def fill_extras_locations(cdb: ClimateDatabase, selected: list[dict]) -> list[dict]:
+    """
+    Locations for --fill-extras: the explicitly selected ones if any were
+    given, otherwise every stored location, in TOP_200 (population) order
+    with Miami and any other stored locations after.
+    """
+    if selected:
+        return selected
+    stored = {r["location_key"]: r for r in cdb.list_locations()}
+    ordered = [loc for loc in top200_locations() + [_MIAMI] if loc["location_key"] in stored]
+    seen = {loc["location_key"] for loc in ordered}
+    for key, row in stored.items():
+        if key in seen:
+            continue
+        try:
+            lat_s, lon_s = key.split(":")
+        except ValueError:
+            logger.warning("Cannot parse location_key %r, skipping", key)
+            continue
+        ordered.append({
+            "location_key": key, "lat": float(lat_s), "lon": float(lon_s),
+            "display_name": row.get("display_name") or key,
+            "zip_code": row.get("zip_code"), "timezone": "auto",
+        })
+    return ordered
+
+
+def backfill_fill_extras(
+    cdb: ClimateDatabase,
+    client: ArchiveClient,
+    locations: list[dict],
+    groups: list[str],
+    dry_run: bool,
+    max_calls: Optional[int],
+) -> None:
+    """
+    Fetches only the selected groups' variables, for location-years that
+    still lack them (see ClimateDatabase.get_unfilled_years), and writes
+    them into the existing rows. Each location is finished before the
+    next; years go newest first. Fields are packed into requests of up to
+    10 variables, since that's the billing minimum per request.
+
+    A failed request is logged and left unrecorded, so the next run
+    retries it. A successful one is recorded in field_fills even if the
+    API returned nulls, so unavailable data isn't re-requested forever.
+    """
+    api_fields = [f for g in groups for f in EXTRA_FIELD_GROUPS[g]]
+    columns    = [API_TO_COLUMN[f] for f in api_fields]
+    yesterday  = date.today() - timedelta(days=1)
+
+    plan_requests = 0
+    plan_weight   = 0.0
+    filled_rows   = 0
+
+    for i, loc in enumerate(locations, 1):
+        key  = loc["location_key"]
+        name = loc["display_name"]
+        needed = cdb.get_unfilled_years(key, columns)
+        if not needed:
+            logger.info("[%d/%d] %-30s nothing to fill", i, len(locations), name)
+            continue
+
+        loc_requests = 0
+        for year in sorted(needed, reverse=True):
+            year_fields = [f for f in api_fields if API_TO_COLUMN[f] in needed[year]]
+            start = date(year, 1, 1)
+            end   = min(date(year, 12, 31), yesterday)
+            n_days = (end - start).days + 1
+
+            for batch in pack_fields(year_fields):
+                plan_requests += 1
+                loc_requests  += 1
+                plan_weight   += request_weight(len(batch), n_days)
+                if dry_run:
+                    continue
+                if max_calls is not None and client.call_count >= max_calls:
+                    logger.info("Call budget (%d) reached — stopping cleanly; re-run to resume", max_calls)
+                    return
+                batch_cols = [API_TO_COLUMN[f] for f in batch]
+                try:
+                    records = client.fetch_daily(
+                        lat=loc["lat"], lon=loc["lon"],
+                        start_date=start.isoformat(), end_date=end.isoformat(),
+                        location_key=key, display_name=name,
+                        zip_code=loc.get("zip_code"),
+                        timezone=loc.get("timezone") or "auto",
+                        fields=batch,
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to fill %s %d (%s): %s", name, year, ", ".join(batch), exc)
+                    continue
+                updated = cdb.update_daily_fields(records, batch_cols)
+                filled_rows += updated
+                through = max((r["date"] for r in records), default=end.isoformat())
+                cdb.record_field_fill(key, year, batch_cols, through)
+                logger.info("Filled %s %d: %d vars x %d rows", name, year, len(batch), updated)
+
+        logger.info("[%d/%d] %-30s %d request(s) %s", i, len(locations), name,
+                    loc_requests, "planned" if dry_run else "done")
+
+    days = plan_weight / DAILY_CALL_BUDGET
+    print(f"\n{'─'*50}")
+    print(f"Fill extras ({', '.join(groups)}): {len(api_fields)} variable(s), "
+          f"{len(locations)} location(s)")
+    if dry_run:
+        print(f"Would make {plan_requests:,} request(s) ≈ {plan_weight:,.0f} weighted calls "
+              f"≈ {days:.1f} day(s) at the {DAILY_CALL_BUDGET:,}/day budget")
+    else:
+        print(f"Filled {filled_rows:,} row(s); {client.call_count} request(s) "
+              f"(~{client.weighted_calls:,.0f} weighted calls)")
+
+
+def acquire_backfill_lock(db_path: Path):
+    """
+    Takes an exclusive, non-blocking lock next to the DB so two backfills
+    can't run at once and together overspend the shared daily quota.
+    Exits with an error if another run holds it. The lock is released
+    automatically when the process exits, however it exits.
+    """
+    lock_path = db_path.with_name(db_path.name + ".backfill.lock")
+    handle = open(lock_path, "w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print(f"Another backfill is already running (lock held on {lock_path}).", file=sys.stderr)
+        sys.exit(2)
+    handle.write(f"{os.getpid()}\n")
+    handle.flush()
+    return handle  # keep a reference: closing it releases the lock
+
+
 def main() -> None:
     """CLI entry point: parses args, resolves the requested zips/cities,
     fetches and inserts their historical daily records, computes
@@ -354,14 +506,31 @@ def main() -> None:
     parser.add_argument("--catchup",   action="store_true",
                         help="Fetch each known location's gap through yesterday "
                              "(one call per location) instead of a full backfill")
+    parser.add_argument("--fill-extras", nargs="*", metavar="GROUP", default=None,
+                        choices=sorted(EXTRA_FIELD_GROUPS),
+                        help="Fill non-core variables for years already stored, by group "
+                             f"({', '.join(EXTRA_FIELD_GROUPS)}; default: all)")
     parser.add_argument("--dry-run",   action="store_true",
                         help="Resolve locations and print plan without API calls")
     args = parser.parse_args()
 
     db_path = Path(args.db)
     client  = ArchiveClient()
+    lock = None if args.dry_run else acquire_backfill_lock(db_path)  # noqa: F841 — held for process lifetime
 
     with ClimateDatabase(db_path) as cdb:
+
+        if args.fill_extras is not None:
+            groups = args.fill_extras or list(EXTRA_FIELD_GROUPS)
+            selected = resolve_locations(args.zips + args.cities) if (args.zips or args.cities) else []
+            if args.top200:
+                seen = {loc["location_key"] for loc in selected}
+                selected += [loc for loc in top200_locations() + [_MIAMI] if loc["location_key"] not in seen]
+            backfill_fill_extras(
+                cdb, client, fill_extras_locations(cdb, selected), groups,
+                dry_run=args.dry_run, max_calls=args.max_calls,
+            )
+            return
 
         if args.catchup:
             backfill_catchup(cdb, client, dry_run=args.dry_run)
