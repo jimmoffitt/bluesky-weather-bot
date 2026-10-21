@@ -12,7 +12,7 @@ geopy>=2.4.0             # Nominatim fallback geocoding for non-top-200 cities
 timezonefinder>=6.2.0    # accurate timezone from lat/lon
 
 # Bluesky (AT Protocol)
-atproto>=0.0.46          # official Bluesky Python SDK
+atproto>=0.0.73          # official Bluesky Python SDK (0.0.73+ knows group-chat log types)
 websockets>=13.0         # JetstreamAlertChannel (Jetstream WebSocket client)
 
 # Image mode (optional — only needed for POST_MODE=image)

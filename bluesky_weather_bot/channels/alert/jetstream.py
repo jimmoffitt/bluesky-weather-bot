@@ -242,6 +242,12 @@ class JetstreamAlertChannel(AlertChannel):
 
         record = commit.get("record") or {}
         text = record.get("text") or ""
+        if not isinstance(text, str):
+            # Records are arbitrary user-published JSON; a non-string text
+            # (seen 2026-10-20) would otherwise raise out of the receive loop,
+            # and since the cursor is already saved, every reconnect
+            # replays the same event — wedging the channel indefinitely.
+            return
         if not self._is_trigger(text):
             return
 

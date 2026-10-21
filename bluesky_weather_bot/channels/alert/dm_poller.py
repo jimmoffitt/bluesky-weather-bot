@@ -7,7 +7,7 @@ location (zip code, city/state, or bare city name) are dispatched as
 AlertRequests with source_channel="dm" so the orchestrator routes the
 response back via DM rather than a public reply.
 
-Uses chat.bsky.convo.get_log with a cursor for delta sync — only new
+Uses chat.bsky.convo.getLog with a cursor for delta sync — only new
 events since the last poll are returned, so there is no redundant
 re-scanning of old conversations.
 
@@ -133,22 +133,34 @@ class DMAlertChannel(AlertChannel):
             return
 
         from atproto import models as atproto_models
+        from atproto_client.models.utils import get_or_create
 
+        # Query getLog raw rather than via chat.bsky.convo.get_log(): the SDK
+        # validates the whole page against a closed union of log types, so a
+        # single event type newer than the installed atproto (e.g.
+        # logReadConvo, Oct 2026) fails the entire page — and since the cursor
+        # never advances, the poller is stuck on that page forever. Validating
+        # entries one at a time lets us skip types we don't know.
         try:
             params = atproto_models.ChatBskyConvoGetLog.Params(cursor=self._cursor)
-            resp = self._chat_client.chat.bsky.convo.get_log(params=params)
+            raw = self._chat_client.invoke_query(
+                "chat.bsky.convo.getLog", params=params, output_encoding="application/json"
+            )
+            content = raw.content if isinstance(raw.content, dict) else {}
         except Exception as exc:
             logger.warning("[dm] get_log failed: %s", exc)
             return
 
-        if resp.cursor:
-            self._cursor = resp.cursor
+        if content.get("cursor"):
+            self._cursor = content["cursor"]
 
-        for log in resp.logs:
+        create_type = atproto_models.ChatBskyConvoDefs.LogCreateMessage.model_fields["py_type"].default
+        for entry in content.get("logs") or []:
             try:
-                if not isinstance(log, atproto_models.ChatBskyConvoDefs.LogCreateMessage):
+                if not isinstance(entry, dict) or entry.get("$type") != create_type:
                     continue
 
+                log = get_or_create(entry, atproto_models.ChatBskyConvoDefs.LogCreateMessage, strict=True)
                 msg = log.message
 
                 # Skip messages sent by the bot itself

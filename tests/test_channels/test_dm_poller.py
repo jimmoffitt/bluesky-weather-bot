@@ -14,7 +14,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from atproto import models as atproto_models
 
 from bluesky_weather_bot.channels.alert.dm_poller import DMAlertChannel
 
@@ -30,22 +29,28 @@ def poller_with_db(mock_settings, db):
 
 
 def _make_log(msg_id: str, sender_did: str, text: str, convo_id: str = "convo1"):
-    """Creates a mock LogCreateMessage entry."""
-    msg = MagicMock()
-    msg.id = msg_id
-    msg.text = text
-    msg.sender.did = sender_did
-
-    log = MagicMock(spec=atproto_models.ChatBskyConvoDefs.LogCreateMessage)
-    log.message = msg
-    log.convo_id = convo_id
-    return log
+    """Creates a raw logCreateMessage entry, shaped like the getLog JSON."""
+    return {
+        "$type": "chat.bsky.convo.defs#logCreateMessage",
+        "rev": "rev1",
+        "convoId": convo_id,
+        "message": {
+            "$type": "chat.bsky.convo.defs#messageView",
+            "id": msg_id,
+            "rev": "rev1",
+            "text": text,
+            "sender": {"did": sender_did},
+            "sentAt": "2026-10-20T17:34:43.000Z",
+        },
+    }
 
 
 def _make_get_log_response(logs, cursor=None):
+    """Mimics the raw Response returned by invoke_query (JSON in .content)."""
     resp = MagicMock()
-    resp.cursor = cursor
-    resp.logs = logs
+    resp.content = {"logs": logs}
+    if cursor:
+        resp.content["cursor"] = cursor
     return resp
 
 
@@ -167,7 +172,7 @@ class TestCheckDMs:
 
     def test_dispatches_message_with_location(self, poller):
         chat = self._setup(poller)
-        chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(
+        chat.invoke_query.return_value = _make_get_log_response(
             logs=[_make_log("msg1", "did:plc:user", "Weather for 80501", "convo1")],
             cursor="cur1",
         )
@@ -182,7 +187,7 @@ class TestCheckDMs:
 
     def test_directive_extracted_and_does_not_corrupt_location(self, poller):
         chat = self._setup(poller)
-        chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(
+        chat.invoke_query.return_value = _make_get_log_response(
             logs=[_make_log("msg1", "did:plc:user", "80501 /forecast /day", "convo1")],
         )
         received = []
@@ -195,7 +200,7 @@ class TestCheckDMs:
 
     def test_skips_own_messages(self, poller):
         chat = self._setup(poller, own_did="did:plc:bot")
-        chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(
+        chat.invoke_query.return_value = _make_get_log_response(
             logs=[_make_log("msg1", "did:plc:bot", "self-sent 80501")]
         )
         received = []
@@ -207,7 +212,7 @@ class TestCheckDMs:
     def test_skips_duplicate_messages(self, poller):
         chat = self._setup(poller)
         poller._mark_seen("msg_dup", "convo1")
-        chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(
+        chat.invoke_query.return_value = _make_get_log_response(
             logs=[_make_log("msg_dup", "did:plc:user", "80501")]
         )
         received = []
@@ -219,7 +224,7 @@ class TestCheckDMs:
     def test_dispatches_with_null_location_when_no_location(self, poller):
         """No-location DMs are dispatched with raw_location=None so the bot can send a help reply."""
         chat = self._setup(poller)
-        chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(
+        chat.invoke_query.return_value = _make_get_log_response(
             logs=[_make_log("msg1", "did:plc:user", "hi")]  # too short for location extraction
         )
         received = []
@@ -232,7 +237,7 @@ class TestCheckDMs:
     def test_message_marked_seen_even_without_location(self, poller):
         """No-location messages should still be marked seen to avoid reprocessing."""
         chat = self._setup(poller)
-        chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(
+        chat.invoke_query.return_value = _make_get_log_response(
             logs=[_make_log("msg_noloc", "did:plc:user", "hello there")]
         )
         poller._check_dms()
@@ -240,19 +245,53 @@ class TestCheckDMs:
 
     def test_cursor_advances_after_poll(self, poller):
         chat = self._setup(poller)
-        chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(
+        chat.invoke_query.return_value = _make_get_log_response(
             logs=[], cursor="newcursor"
         )
         poller._check_dms()
         assert poller._cursor == "newcursor"
 
+    def test_unknown_log_types_do_not_block_messages(self, poller):
+        """Regression (2026-10-20): Bluesky added logReadConvo, which the
+        pinned atproto's closed union rejected — failing the whole page and
+        freezing the cursor. Unknown types must be skipped, not fatal."""
+        chat = self._setup(poller)
+        chat.invoke_query.return_value = _make_get_log_response(
+            logs=[
+                {"$type": "chat.bsky.convo.defs#logReadConvo", "rev": "r0", "convoId": "convo1"},
+                {"$type": "chat.bsky.convo.defs#logSomethingFromTheFuture", "rev": "r0"},
+                _make_log("msg1", "did:plc:user", "Weather for 80501", "convo1"),
+            ],
+            cursor="cur2",
+        )
+        received = []
+        poller.on_request(received.append)
+        poller._check_dms()
+
+        assert [r.raw_location for r in received] == ["80501"]
+        assert poller._cursor == "cur2"
+
+    def test_malformed_create_message_skipped_not_fatal(self, poller):
+        chat = self._setup(poller)
+        chat.invoke_query.return_value = _make_get_log_response(
+            logs=[
+                {"$type": "chat.bsky.convo.defs#logCreateMessage", "convoId": "convo1"},  # no message
+                _make_log("msg2", "did:plc:user", "80501"),
+            ],
+        )
+        received = []
+        poller.on_request(received.append)
+        poller._check_dms()
+
+        assert [r.raw_location for r in received] == ["80501"]
+
     def test_cursor_sent_on_subsequent_poll(self, poller):
         chat = self._setup(poller)
         poller._cursor = "existing_cursor"
-        chat.chat.bsky.convo.get_log.return_value = _make_get_log_response(logs=[])
+        chat.invoke_query.return_value = _make_get_log_response(logs=[])
         poller._check_dms()
 
-        call_params = chat.chat.bsky.convo.get_log.call_args.kwargs["params"]
+        call_params = chat.invoke_query.call_args.kwargs["params"]
         assert call_params.cursor == "existing_cursor"
 
     def test_no_dispatch_when_chat_client_none(self, poller):

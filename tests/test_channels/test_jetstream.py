@@ -111,3 +111,29 @@ class TestBuildRequest:
         )
         assert req.raw_location == "80501"
         assert req.directives == frozenset({"forecast"})
+
+
+# ---------------------------------------------------------------------------
+# _handle_message robustness
+# ---------------------------------------------------------------------------
+
+class TestHandleMessage:
+    @staticmethod
+    def _event(record, time_us=1):
+        import json
+        return json.dumps({
+            "did": "did:plc:someone", "time_us": time_us, "kind": "commit",
+            "commit": {"operation": "create", "collection": "app.bsky.feed.post",
+                       "rkey": "abc", "cid": "cid1", "record": record},
+        })
+
+    def test_non_string_text_is_skipped_not_raised(self, channel):
+        """Regression (2026-10-20): a post with a dict-valued text raised out
+        of the receive loop; the cursor replayed it on every reconnect."""
+        from unittest.mock import MagicMock
+        channel._cpu_sampler = MagicMock()  # normally created in start()
+        received = []
+        channel.on_request(received.append)
+        channel._handle_message(self._event({"text": {"oops": "not a string"}}, time_us=42))
+        assert received == []
+        assert channel._cursor == 42
