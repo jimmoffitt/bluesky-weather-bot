@@ -300,3 +300,68 @@ class TestCheckDMs:
         poller.on_request(received.append)
         poller._check_dms()  # should not raise
         assert len(received) == 0
+
+
+# ---------------------------------------------------------------------------
+# Cursor persistence
+# ---------------------------------------------------------------------------
+
+class TestCursorPersistence:
+    def _setup(self, poller):
+        mock_chat = MagicMock()
+        poller._chat_client = mock_chat
+        poller._own_did = "did:plc:bot"
+        poller._did_to_handle = MagicMock(return_value="user.bsky.social")
+        return mock_chat
+
+    def test_cursor_saved_to_db_when_it_advances(self, poller_with_db, db):
+        chat = self._setup(poller_with_db)
+        chat.invoke_query.return_value = _make_get_log_response(logs=[], cursor="cur9")
+        poller_with_db._check_dms()
+        assert db.get_channel_state("dm.getlog_cursor") == "cur9"
+
+    def test_restart_resumes_from_saved_cursor(self, mock_settings, db):
+        """Regression (2026-10-20): the cursor lived only in memory, so a
+        restart jumped to "now" and dropped DMs sent while the bot was down."""
+        db.set_channel_state("dm.getlog_cursor", "saved_cur")
+        poller = DMAlertChannel(mock_settings, db=db)
+        chat = self._setup(poller)
+        chat.invoke_query.return_value = _make_get_log_response(
+            logs=[_make_log("msg_offline", "did:plc:user", "80501")], cursor="cur10",
+        )
+        received = []
+        poller.on_request(received.append)
+        poller._check_dms()
+
+        assert chat.invoke_query.call_args.kwargs["params"].cursor == "saved_cur"
+        assert [r.raw_location for r in received] == ["80501"]
+        assert db.get_channel_state("dm.getlog_cursor") == "cur10"
+
+    def test_rejected_saved_cursor_falls_back_to_now(self, mock_settings, db):
+        db.set_channel_state("dm.getlog_cursor", "ancient_cur")
+        poller = DMAlertChannel(mock_settings, db=db)
+        chat = self._setup(poller)
+        chat.invoke_query.side_effect = Exception("InvalidCursor")
+        poller._check_dms()
+        assert poller._cursor is None
+
+        chat.invoke_query.side_effect = None
+        chat.invoke_query.return_value = _make_get_log_response(logs=[], cursor="fresh")
+        poller._check_dms()
+        assert chat.invoke_query.call_args.kwargs["params"].cursor is None
+        assert db.get_channel_state("dm.getlog_cursor") == "fresh"
+
+    def test_transient_error_keeps_proven_cursor(self, poller_with_db):
+        """Once the server has accepted our cursor, a later blip must not discard it."""
+        chat = self._setup(poller_with_db)
+        chat.invoke_query.return_value = _make_get_log_response(logs=[], cursor="good")
+        poller_with_db._check_dms()
+        chat.invoke_query.side_effect = Exception("503")
+        poller_with_db._check_dms()
+        assert poller_with_db._cursor == "good"
+
+    def test_channel_state_upsert(self, db):
+        assert db.get_channel_state("k") is None
+        db.set_channel_state("k", "a")
+        db.set_channel_state("k", "b")
+        assert db.get_channel_state("k") == "b"

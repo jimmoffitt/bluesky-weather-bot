@@ -11,6 +11,11 @@ Uses chat.bsky.convo.getLog with a cursor for delta sync — only new
 events since the last poll are returned, so there is no redundant
 re-scanning of old conversations.
 
+The cursor is persisted to the DB channel_state table (when db= is given),
+so a restart resumes where it left off instead of jumping to "now" and
+silently dropping DMs that arrived while the bot was down. Replayed events
+are harmless — dedup below filters them.
+
 Message deduplication is two-layered:
   1. In-memory set (fast, cleared on restart).
   2. DB seen_dm_ids table (survives restarts; requires db= parameter).
@@ -34,6 +39,7 @@ _ZIP_RE     = re.compile(r"\b(\d{5})\b")
 _CITY_ST_RE = re.compile(r"\b([A-Z][a-zA-Z\s]{2,20}),\s*([A-Z]{2})\b")
 
 DEFAULT_POLL_INTERVAL = 5.0
+CURSOR_STATE_KEY = "dm.getlog_cursor"
 
 
 class DMAlertChannel(AlertChannel):
@@ -61,6 +67,8 @@ class DMAlertChannel(AlertChannel):
         self._chat_client   = None        # proxy client for chat.bsky.convo.*
         self._own_did: str  = ""          # bot's own DID, set in _login()
         self._cursor: Optional[str] = None  # get_log delta cursor
+        self._cursor_loaded = False         # tried loading the saved cursor yet?
+        self._cursor_unproven = False       # saved cursor not yet accepted by server
         self._seen_ids: set[str] = set()  # in-memory dedup (session only)
 
     # ------------------------------------------------------------------
@@ -132,6 +140,8 @@ class DMAlertChannel(AlertChannel):
         if self._chat_client is None:
             return
 
+        self._load_cursor()
+
         from atproto import models as atproto_models
         from atproto_client.models.utils import get_or_create
 
@@ -149,10 +159,19 @@ class DMAlertChannel(AlertChannel):
             content = raw.content if isinstance(raw.content, dict) else {}
         except Exception as exc:
             logger.warning("[dm] get_log failed: %s", exc)
+            if self._cursor_unproven:
+                # A saved cursor may be too old for the server to honor;
+                # don't let it wedge the poller — restart from "now".
+                logger.warning("[dm] Discarding saved cursor %s; resuming from now", self._cursor)
+                self._cursor = None
+                self._cursor_unproven = False
             return
 
-        if content.get("cursor"):
-            self._cursor = content["cursor"]
+        self._cursor_unproven = False
+        new_cursor = content.get("cursor")
+        if new_cursor and new_cursor != self._cursor:
+            self._cursor = new_cursor
+            self._save_cursor()
 
         create_type = atproto_models.ChatBskyConvoDefs.LogCreateMessage.model_fields["py_type"].default
         for entry in content.get("logs") or []:
@@ -201,6 +220,36 @@ class DMAlertChannel(AlertChannel):
 
             except Exception as exc:
                 logger.debug("[dm] Skipping malformed log entry: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Cursor persistence
+    # ------------------------------------------------------------------
+
+    def _load_cursor(self) -> None:
+        """Once per instance: resume from the DB-saved cursor, if any."""
+        if self._cursor_loaded:
+            return
+        self._cursor_loaded = True
+        if self._db is None or self._cursor is not None:
+            return
+        try:
+            saved = self._db.get_channel_state(CURSOR_STATE_KEY)
+        except Exception as exc:
+            logger.debug("[dm] Could not load saved cursor: %s", exc)
+            return
+        if saved:
+            self._cursor = saved
+            self._cursor_unproven = True
+            logger.info("[dm] Resuming from saved cursor %s", saved)
+
+    def _save_cursor(self) -> None:
+        """Persists the current cursor. Best-effort, like _mark_seen."""
+        if self._db is None or not self._cursor:
+            return
+        try:
+            self._db.set_channel_state(CURSOR_STATE_KEY, self._cursor)
+        except Exception as exc:
+            logger.debug("[dm] Could not persist cursor: %s", exc)
 
     # ------------------------------------------------------------------
     # Deduplication helpers

@@ -6,6 +6,8 @@ SQLite with WAL mode. Schema:
   responses       — every outbound notification, with delivery timestamps
   weather_cache   — 1-hour TTL cache of WeatherReport JSON blobs
   seen_dm_ids     — DM message IDs already processed (survives restarts)
+  channel_state   — small key/value store for alert-channel resume state
+                    (e.g. the DM getLog cursor)
   file_inbox_log  — audit trail for file watcher activity
   alarm_rules     — user-registered weather alarm conditions
 
@@ -17,6 +19,7 @@ Retention policy (enforced by prune_old_records(), call daily):
   requests / responses  → purged after 90 days
   weather_cache         → purged when expires_at passes (1-hour TTL)
   seen_dm_ids           → kept forever (small table)
+  channel_state         → kept forever (one row per key, overwritten)
   file_inbox_log        → purged after 90 days
 
 Latency timestamps (all ISO8601 UTC, set by the orchestrator bot.py):
@@ -284,6 +287,15 @@ class Database:
                 message_id  TEXT PRIMARY KEY,
                 convo_id    TEXT NOT NULL,
                 seen_at     TEXT NOT NULL
+            );
+
+            -- --------------------------------------------------------
+            -- channel_state: alert-channel resume state (one row per key)
+            -- --------------------------------------------------------
+            CREATE TABLE IF NOT EXISTS channel_state (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
             );
 
             -- --------------------------------------------------------
@@ -857,6 +869,30 @@ class Database:
         """Total count of DM message IDs ever recorded as seen."""
         assert self._conn
         return self._conn.execute("SELECT COUNT(*) FROM seen_dm_ids").fetchone()[0]
+
+    # ------------------------------------------------------------------
+    # channel_state
+    # ------------------------------------------------------------------
+
+    @_locked
+    def get_channel_state(self, key: str) -> Optional[str]:
+        """Returns the stored value for key, or None if never set."""
+        assert self._conn
+        row = self._conn.execute(
+            "SELECT value FROM channel_state WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else None
+
+    @_locked
+    def set_channel_state(self, key: str, value: str) -> None:
+        """Upserts value for key."""
+        assert self._conn
+        self._conn.execute(
+            "INSERT INTO channel_state (key, value, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (key, value, _now()),
+        )
+        self._conn.commit()
 
     # ------------------------------------------------------------------
     # user_prefs
