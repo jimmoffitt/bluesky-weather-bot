@@ -116,13 +116,20 @@ DAILY_VARS = ",".join(api_name for api_name, _ in DAILY_FIELD_MAP)
 #     after ~25 minutes of sustained activity
 # The backfill is a one-time job with no time pressure — there is no
 # reason to run it anywhere near what the API can theoretically sustain.
-# MIN_REQUEST_INTERVAL_SEC is deliberately conservative (4/min) as the
+# MIN_REQUEST_INTERVAL_SEC is deliberately conservative (1/min) as the
 # starting point, not a target to push against; INTERVAL_BACKOFF_MULTIPLIER
 # still grows it further (up to MAX_REQUEST_INTERVAL_SEC) if even this
 # triggers a 429, and a run of clean successes relaxes it back down. See
 # ArchiveClient._current_interval.
-MIN_REQUEST_INTERVAL_SEC = 30.0
-MAX_REQUEST_INTERVAL_SEC = 90.0
+#
+# Bumped from 30s/90s to 60s/180s on 2026-08-21 after Los Angeles hit a
+# multi-hour standing block (39 straight full-retry exhaustions) that even
+# the old 90s ceiling never recovered from — a fresh probe at a flat 60s
+# interval also failed instantly, confirming it wasn't purely about pacing.
+# Went slower anyway per user request, and because a long rest period
+# (~13.5 hours, spanning a UTC day rollover) is what actually cleared it.
+MIN_REQUEST_INTERVAL_SEC = 60.0
+MAX_REQUEST_INTERVAL_SEC = 180.0
 INTERVAL_BACKOFF_MULTIPLIER = 1.8   # applied to the baseline on every 429
 INTERVAL_RELAX_AFTER = 20           # consecutive successes before easing off
 INTERVAL_RELAX_MULTIPLIER = 0.85
@@ -139,7 +146,19 @@ MAX_RETRIES = 5
 # separately-escalating cooldown before the next request is even
 # attempted, on top of the per-request interval above.
 EXHAUSTION_COOLDOWN_BASE_SEC = 60.0
-MAX_EXHAUSTION_COOLDOWN_SEC = 600.0
+MAX_EXHAUSTION_COOLDOWN_SEC = 900.0
+
+# Both multi-hour standing blocks observed so far (Los Angeles on 2026-08-21,
+# Chicago on 2026-08-22) started within minutes of 07:13-08:34 local (Pi
+# system time, America/Denver) — thin evidence from two data points, but
+# free to guard against since this is a one-time job with no time pressure.
+# Padded generously around the two observed times rather than tuned tightly
+# to them. If this turns out not to correlate with anything real, it just
+# costs a skipped hour a day; it does not fix a true pacing/quota problem.
+BLACKOUT_START_HOUR = 6
+BLACKOUT_START_MINUTE = 30
+BLACKOUT_END_HOUR = 9
+BLACKOUT_END_MINUTE = 30
 
 
 class ArchiveClient:
@@ -309,11 +328,27 @@ class ArchiveClient:
     # Internal
     # ------------------------------------------------------------------
 
+    def _wait_out_blackout_window(self) -> None:
+        """Sleep until BLACKOUT_END_HOUR:BLACKOUT_END_MINUTE if we're
+        currently inside the suspected high-risk local-time window. See the
+        BLACKOUT_* constants for why this window specifically."""
+        now = datetime.now()
+        start = now.replace(hour=BLACKOUT_START_HOUR, minute=BLACKOUT_START_MINUTE, second=0, microsecond=0)
+        end = now.replace(hour=BLACKOUT_END_HOUR, minute=BLACKOUT_END_MINUTE, second=0, microsecond=0)
+        if start <= now < end:
+            wait = (end - now).total_seconds()
+            logger.info(
+                "Pausing %.0fs to sit out the %02d:%02d-%02d:%02d local blackout window",
+                wait, BLACKOUT_START_HOUR, BLACKOUT_START_MINUTE, BLACKOUT_END_HOUR, BLACKOUT_END_MINUTE,
+            )
+            time.sleep(wait)
+
     def _get(self, params: dict, attempt: int = 0) -> dict:
         """GET with exponential-backoff retry on rate limiting (HTTP 429)
         and transient network errors, up to MAX_RETRIES attempts. Every
         real request — including retries — waits for the current adaptive
         interval (self._current_interval) since the last one first."""
+        self._wait_out_blackout_window()
         if self._last_request_at is not None:
             wait = self._current_interval - (time.time() - self._last_request_at)
             if wait > 0:

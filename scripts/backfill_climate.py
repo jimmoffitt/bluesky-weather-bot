@@ -13,10 +13,15 @@ Usage examples:
     # City names, capped to the last 10 years instead
     python3 scripts/backfill_climate.py --cities "Denver, CO" "Boulder, CO" --years 10
 
-    # Every city in archive/cities.py's TOP_200 list (~203 cities), full
-    # history — 17k+ calls, well over the 10,000/day free-tier quota, so
-    # this stops cleanly partway through and picks up where it left off
-    # (already-fetched years are skipped) on the next run:
+    # Every city in archive/cities.py's TOP_200 list (~203 cities, plus
+    # Miami). Default depth is tiered, not a flat --years for everyone:
+    # DEEP_HISTORY_NAMES (NYC, LA, Denver, SF, Minneapolis, Chicago, Miami)
+    # get the full 1940-present archive; every other city gets only
+    # SHALLOW_HISTORY_START_YEAR-present (2000-) to keep total call volume
+    # down. Pass an explicit --years to override this uniformly for every
+    # location instead. Stops cleanly if it runs into the daily quota (or
+    # a standing throttle) and picks up where it left off — already-fetched
+    # years are skipped — on the next run:
     python3 scripts/backfill_climate.py --top200
     python3 scripts/backfill_climate.py --top200   # next day, resumes
 
@@ -73,6 +78,43 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# Full 1940-present history is expensive (86 years/location) and every
+# extra location multiplies the odds of tripping Open-Meteo's undocumented
+# throttling. Only a handful of flagship cities get the full depth; the
+# rest of TOP_200 gets a much cheaper recent-decades slice. Adjust freely —
+# this is just a call-volume dial, not a data-availability limit.
+DEEP_HISTORY_NAMES = {
+    "New York, NY", "Los Angeles, CA", "Denver, CO", "San Francisco, CA",
+    "Minneapolis, MN", "Chicago, IL", "Miami, FL",
+}
+SHALLOW_HISTORY_START_YEAR = 2000
+
+# Miami isn't in TOP_200 (city-proper population ranks it outside the top
+# 200; the metro area is far larger) but was explicitly requested as one
+# of the deep-history cities, so it's added as a one-off extra location.
+_MIAMI = {
+    "location_key": make_key(25.7617, -80.1918),
+    "lat":          25.7617,
+    "lon":          -80.1918,
+    "display_name": "Miami, FL",
+    "zip_code":     "33130",
+    "timezone":     "America/New_York",
+}
+
+
+def years_for(loc: dict, requested_years: Optional[int]) -> Optional[int]:
+    """
+    Per-location years-of-history depth. An explicit --years flag overrides
+    everything uniformly (unchanged behavior); otherwise DEEP_HISTORY_NAMES
+    get the full 1940-present archive and everything else is capped to
+    SHALLOW_HISTORY_START_YEAR-present.
+    """
+    if requested_years is not None:
+        return requested_years
+    if loc["display_name"] in DEEP_HISTORY_NAMES:
+        return None
+    return date.today().year - SHALLOW_HISTORY_START_YEAR
 
 
 def resolve_locations(raw_list: list[str]) -> list[dict]:
@@ -333,7 +375,7 @@ def main() -> None:
         locations = resolve_locations(raw_locations) if raw_locations else []
         if args.top200:
             seen_keys = {loc["location_key"] for loc in locations}
-            for loc in top200_locations():
+            for loc in top200_locations() + [_MIAMI]:
                 if loc["location_key"] not in seen_keys:
                     seen_keys.add(loc["location_key"])
                     locations.append(loc)
@@ -342,8 +384,16 @@ def main() -> None:
             logger.error("No locations resolved. Nothing to do.")
             sys.exit(1)
 
-        span = f"{args.years} year(s)" if args.years is not None else "full history (1940-present)"
-        print(f"\nBackfilling {len(locations)} location(s), {span} each\n")
+        if args.years is None and args.top200:
+            n_deep = sum(1 for loc in locations if loc["display_name"] in DEEP_HISTORY_NAMES)
+            print(
+                f"\nBackfilling {len(locations)} location(s): "
+                f"{n_deep} full history (1940-present), "
+                f"{len(locations) - n_deep} back to {SHALLOW_HISTORY_START_YEAR}\n"
+            )
+        else:
+            span = f"{args.years} year(s)" if args.years is not None else "full history (1940-present)"
+            print(f"\nBackfilling {len(locations)} location(s), {span} each\n")
 
         results = []
         quota_stopped = False
@@ -361,7 +411,7 @@ def main() -> None:
             print(f"[{i}/{len(locations)}] {loc['display_name']}")
             result = backfill_location(
                 cdb, client, loc,
-                years=args.years,
+                years=years_for(loc, args.years),
                 dry_run=args.dry_run,
                 max_calls=args.max_calls,
             )
